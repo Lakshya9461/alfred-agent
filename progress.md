@@ -255,6 +255,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `LOG_MAX_BYTES` | — | `10485760` | Rotate `conversations.jsonl` / `audit_log.jsonl` past this size (bytes) |
 | `MAX_LESSONS_IN_PROMPT` | — | `20` | Max relevance-scored lessons fed into the system prompt |
 | `CONFIRM_ALL_COMMANDS` | — | `false` | Trial mode: require confirmation for EVERY shell command |
+| `OLLAMA_REQUEST_TIMEOUT` | — | `300` | Per-request timeout (s) for Ollama API calls; generous so cold model loads don't fail |
 
 ---
 

@@ -49,3 +49,7 @@ MAX_LESSONS_IN_PROMPT = int(os.getenv("MAX_LESSONS_IN_PROMPT", "20"))
 
 # Trial mode: require confirmation for EVERY shell command, not just dangerous ones
 CONFIRM_ALL_COMMANDS = os.getenv("CONFIRM_ALL_COMMANDS", "false").lower() in ("1", "true", "yes", "on")
+
+# Per-request timeout for Ollama API calls. The first /api/chat after startup
+# triggers a cold model load which can take a while on big models, so keep this generous.
+OLLAMA_REQUEST_TIMEOUT = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "300"))

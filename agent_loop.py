@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, List
 from dataclasses import dataclass
 
-from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS, CONFIRMATION_TIMEOUT_SECONDS, MAX_LESSONS_IN_PROMPT
+from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS, CONFIRMATION_TIMEOUT_SECONDS, MAX_LESSONS_IN_PROMPT, OLLAMA_REQUEST_TIMEOUT
 import runtime_config
 from tools import get_tool_schemas, execute_tool
 from tools.shell_exec import ConfirmationRequired
@@ -63,7 +63,7 @@ LESSONS FROM PAST INTERACTIONS:
     
     tools_def = get_tool_schemas()
     
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_REQUEST_TIMEOUT) as client:
         iterations = 0
         
         while iterations < MAX_TOOL_ITERATIONS:
