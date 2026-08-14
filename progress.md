@@ -150,8 +150,8 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `remove_lesson(index)` — 1-based index removal.
 - `format_lessons_for_prompt(lessons)` — formats lessons as a bullet list for the system prompt.
 - `score_lesson(lesson, user_message)` / `get_relevant_lessons(lessons, user_message, top_n)` — keyword-overlap scoring + recency bonus; used by `agent_loop` to feed only the top `MAX_LESSONS_IN_PROMPT` relevant lessons instead of all of them.
-- `log_conversation(entry)` — append-only JSONL write to `data/conversations.jsonl`, rotated via `LOG_MAX_BYTES`.
-- `_rotate_if_large(filepath, max_bytes)` — shared rotation helper (also used by `shell_exec.log_audit`).
+- `log_conversation(entry)` — append-only JSONL write to `data/conversations.jsonl`, rotated via `LOG_MAX_BYTES`, serialized via `_append_jsonl`.
+- `_append_jsonl(filepath, entry, max_bytes)` — shared, thread-safe append + rotation helper (also used by `shell_exec.log_audit`). Required because Windows append mode is not atomic across threads.
 - `log_failed_command(command, stderr)` — saves auto-categorized lesson on shell failure (source="auto").
 
 ---
@@ -210,6 +210,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 13 | Sync tools (`run_shell`, `web_search`) blocked the async event loop; a slow DDGS search or 30s shell command froze the whole bot | `execute_tool` runs sync tools via `asyncio.to_thread`; `/shell` handlers also use `asyncio.to_thread` |
 | 14 | `await future` on shell confirmation waited forever — a turn hung indefinitely if the user never clicked ✅/❌ | `asyncio.wait_for(future, CONFIRMATION_TIMEOUT_SECONDS)` auto-cancels the command (default 120s) |
 | 15 | `/shell ollama pull ...` died at the 30s default timeout | Added optional `--timeout <secs>` prefix to `/shell` (e.g. `/shell --timeout 600 ollama pull deepseek-r1:14b`) |
+| 16 | Concurrent JSONL appends lost lines on Windows (~20% dropped under load) | Windows `open(..., "a")` is not thread-atomic; serialized all JSONL writes through a shared `threading.Lock` (`_append_jsonl` in `tools/memory.py`) |
 
 ---
 

@@ -4,8 +4,13 @@ Memory management tool for learning lessons and keeping track of conversation co
 import json
 import os
 import re
+import threading
 from datetime import datetime, UTC
 from config import PROJECT_ROOT, MAX_LESSONS, LOG_MAX_BYTES
+
+# Serializes JSONL appends — Windows "append" mode is not atomic across threads,
+# so concurrent writers (block=False turns, background tasks) would drop lines.
+_LOG_LOCK = threading.Lock()
 
 def _rotate_if_large(filepath: str, max_bytes: int):
     """Rotate an append-only log once it exceeds max_bytes."""
@@ -18,6 +23,13 @@ def _rotate_if_large(filepath: str, max_bytes: int):
     except Exception:
         pass
 
+def _append_jsonl(filepath: str, entry: dict, max_bytes: int):
+    """Thread-safe append of a JSON line, rotating the file first if oversized."""
+    with _LOG_LOCK:
+        _rotate_if_large(filepath, max_bytes)
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
 def log_conversation(entry: dict):
     """
     Logs a conversation turn to conversations.jsonl.
@@ -25,9 +37,7 @@ def log_conversation(entry: dict):
     filepath = os.path.join(PROJECT_ROOT, "data", "conversations.jsonl")
     entry['timestamp'] = datetime.now(UTC).isoformat()
     try:
-        _rotate_if_large(filepath, LOG_MAX_BYTES)
-        with open(filepath, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(entry) + '\n')
+        _append_jsonl(filepath, entry, LOG_MAX_BYTES)
     except Exception as e:
         print(f"Failed to log conversation: {e}")
 

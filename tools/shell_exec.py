@@ -5,7 +5,7 @@ import re
 from datetime import datetime, UTC
 from typing import Literal
 from config import PROJECT_ROOT, SHELL_WORKING_DIR, SHELL_TIMEOUT_SECONDS, CONFIRM_ALL_COMMANDS, LOG_MAX_BYTES
-from .memory import _rotate_if_large
+from .memory import _append_jsonl
 import runtime_config
 
 class ConfirmationRequired(Exception):
@@ -124,9 +124,7 @@ def log_audit(command: str, shell: str, is_dangerous: bool, outcome: str):
         "outcome": outcome
     }
     try:
-        _rotate_if_large(audit_file, LOG_MAX_BYTES)
-        with open(audit_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        _append_jsonl(audit_file, entry, LOG_MAX_BYTES)
     except Exception:
         pass
 
