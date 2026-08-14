@@ -53,3 +53,15 @@ CONFIRM_ALL_COMMANDS = os.getenv("CONFIRM_ALL_COMMANDS", "false").lower() in ("1
 # Per-request timeout for Ollama API calls. The first /api/chat after startup
 # triggers a cold model load which can take a while on big models, so keep this generous.
 OLLAMA_REQUEST_TIMEOUT = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "300"))
+
+# Hard cap on the context window sent to Ollama (num_ctx). 0 = use the
+# auto-detected value. Set this (e.g. 32768) on machines that can't allocate
+# the full KV cache for a huge-context model like ornith:9b (262144).
+OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "0"))
+
+
+def effective_context_length(detected: int) -> int:
+    """Context window to actually send to Ollama: env override wins, else detected."""
+    if OLLAMA_CONTEXT_LENGTH > 0:
+        return OLLAMA_CONTEXT_LENGTH
+    return detected

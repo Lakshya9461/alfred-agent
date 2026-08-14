@@ -17,7 +17,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, PROJECT_ROOT, CONFIRM_ALL_COMMANDS
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, PROJECT_ROOT, CONFIRM_ALL_COMMANDS, effective_context_length
 from agent_loop import run_agent_turn
 from tools.memory import load_lessons, remove_lesson
 import self_review
@@ -501,6 +501,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⏳ Switching to `{chosen}` and detecting context window...", parse_mode="Markdown")
         
         ctx_len, _ = await ollama_utils.get_model_context_length(chosen)
+        ctx_len = effective_context_length(ctx_len)
         runtime_config.CURRENT_MODEL = chosen
         runtime_config.CURRENT_CONTEXT_LENGTH = ctx_len
         ctx_k = ctx_len // 1000
@@ -587,6 +588,7 @@ async def post_init(app: Application):
     
     # Auto-detect context window for the startup model
     ctx_len, _ = await ollama_utils.get_model_context_length(runtime_config.CURRENT_MODEL)
+    ctx_len = effective_context_length(ctx_len)
     runtime_config.CURRENT_CONTEXT_LENGTH = ctx_len
     logger.info(f"Startup model: {runtime_config.CURRENT_MODEL} | context window: {ctx_len:,} tokens")
 

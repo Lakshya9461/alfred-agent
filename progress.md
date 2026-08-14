@@ -256,6 +256,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `MAX_LESSONS_IN_PROMPT` | — | `20` | Max relevance-scored lessons fed into the system prompt |
 | `CONFIRM_ALL_COMMANDS` | — | `false` | Trial mode: require confirmation for EVERY shell command |
 | `OLLAMA_REQUEST_TIMEOUT` | — | `300` | Per-request timeout (s) for Ollama API calls; generous so cold model loads don't fail |
+| `OLLAMA_CONTEXT_LENGTH` | — | `0` | Hard cap on `num_ctx` sent to Ollama. `0` = auto-detect. Set on machines that can't handle a huge-context model (e.g. `32768` for ornith:9b's 262144) — without a cap, `/api/chat` hangs as Ollama tries to allocate the full KV cache |
 
 ---
 
