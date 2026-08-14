@@ -140,14 +140,14 @@ if __name__ == "__main__":
     
     print("Testing dangerous commands (should all be True):")
     for cmd in dangerous_commands:
-        res = is_dangerous(cmd)
-        assert res is True, f"Failed: {cmd} should be True"
-        print(f"  [PASS] {cmd} -> {res}")
-        
+        danger, reason = is_dangerous(cmd)
+        assert danger is True, f"Failed: {cmd} should be True"
+        print(f"  [PASS] {cmd} -> danger={danger}, reason={reason}")
+
     print("\nTesting safe commands (should all be False):")
     for cmd in safe_commands:
-        res = is_dangerous(cmd)
-        assert res is False, f"Failed: {cmd} should be False"
-        print(f"  [PASS] {cmd} -> {res}")
-        
+        danger, reason = is_dangerous(cmd)
+        assert danger is False, f"Failed: {cmd} should be False"
+        print(f"  [PASS] {cmd} -> danger={danger}")
+
     print("\nAll is_dangerous tests passed!")

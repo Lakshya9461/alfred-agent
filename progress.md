@@ -185,6 +185,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 8 | `/shell` dangerous confirmation callback silent fail | Used `DIRECT_SHELL_CACHE` dict + short ID in callback_data to stay under Telegram's 64-byte limit |
 | 9 | `asyncio.iscoroutinefunction` deprecation (Python 3.14) | Switched to `inspect.iscoroutinefunction` in `tools/__init__.py` |
 | 10 | `is_dangerous` returned `bool`, callers needed a reason string | Changed return type to `tuple[bool, str]` |
+| 11 | Stale `is_dangerous` self-test in `tools/shell_exec.py` | Updated `__main__` test block to unpack the `(bool, reason)` tuple (missed when return type changed in bug #10) |
 
 ---
 
