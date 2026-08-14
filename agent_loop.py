@@ -7,11 +7,11 @@ from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, List
 from dataclasses import dataclass
 
-from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS, CONFIRMATION_TIMEOUT_SECONDS
+from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS, CONFIRMATION_TIMEOUT_SECONDS, MAX_LESSONS_IN_PROMPT
 import runtime_config
 from tools import get_tool_schemas, execute_tool
 from tools.shell_exec import ConfirmationRequired
-from tools.memory import log_conversation, format_lessons_for_prompt
+from tools.memory import log_conversation, format_lessons_for_prompt, get_relevant_lessons
 
 @dataclass
 class AgentEvent:
@@ -31,7 +31,8 @@ async def run_agent_turn(
     history.append({"role": "user", "content": user_message})
     
     current_date = datetime.now().strftime("%Y-%m-%d %A")
-    lessons_text = format_lessons_for_prompt(lessons)
+    relevant_lessons = get_relevant_lessons(lessons, user_message, MAX_LESSONS_IN_PROMPT)
+    lessons_text = format_lessons_for_prompt(relevant_lessons)
     
     system_prompt = f"""You are Alfred, a sharp and proactive personal agent running on the user's own Windows 11 workstation.
 Today is {current_date}. You have direct access to the machine via PowerShell (and optionally WSL2 bash).

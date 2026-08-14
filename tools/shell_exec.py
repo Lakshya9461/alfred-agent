@@ -4,7 +4,9 @@ import json
 import re
 from datetime import datetime, UTC
 from typing import Literal
-from config import PROJECT_ROOT, SHELL_WORKING_DIR, SHELL_TIMEOUT_SECONDS
+from config import PROJECT_ROOT, SHELL_WORKING_DIR, SHELL_TIMEOUT_SECONDS, CONFIRM_ALL_COMMANDS, LOG_MAX_BYTES
+from .memory import _rotate_if_large
+import runtime_config
 
 class ConfirmationRequired(Exception):
     pass
@@ -43,7 +45,17 @@ def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", 
     """
     Executes a shell command. Raises ConfirmationRequired if dangerous and not confirmed.
     """
+    if not runtime_config.SHELL_ENABLED:
+        return {
+            "stdout": "",
+            "stderr": "Shell execution is disabled (lockdown mode). Use /unlock to re-enable.",
+            "returncode": -1,
+            "was_confirmed": confirmed
+        }
+
     dangerous, reason = is_dangerous(command)
+    if CONFIRM_ALL_COMMANDS:
+        dangerous, reason = True, "Confirm-all mode is enabled — every command needs approval."
     
     if dangerous and not confirmed:
         log_audit(command, shell, True, "blocked_unconfirmed")
@@ -112,6 +124,7 @@ def log_audit(command: str, shell: str, is_dangerous: bool, outcome: str):
         "outcome": outcome
     }
     try:
+        _rotate_if_large(audit_file, LOG_MAX_BYTES)
         with open(audit_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:

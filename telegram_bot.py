@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import time
 import asyncio
 import logging
@@ -16,7 +17,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, PROJECT_ROOT, CONFIRM_ALL_COMMANDS
 from agent_loop import run_agent_turn
 from tools.memory import load_lessons, remove_lesson
 import self_review
@@ -31,6 +32,29 @@ logger = logging.getLogger(__name__)
 
 # In-memory conversation history: chat_id -> list of message dicts
 CHAT_HISTORIES: Dict[int, List[Dict[str, Any]]] = {}
+
+# Persistence file for chat histories (survives restarts)
+HISTORY_FILE = os.path.join(PROJECT_ROOT, "data", "chat_histories.json")
+
+def save_histories():
+    """Persist chat histories to disk so they survive restarts."""
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(CHAT_HISTORIES, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Failed to save chat histories: {e}")
+
+def load_histories():
+    """Restore chat histories from disk on startup."""
+    global CHAT_HISTORIES
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                CHAT_HISTORIES = {int(k): v for k, v in data.items()}
+    except Exception as e:
+        logger.warning(f"Failed to load chat histories: {e}")
 
 # Pending futures for tool confirmations: callback_data_id -> Future
 PENDING_CONFIRMATIONS: Dict[str, asyncio.Future] = {}
@@ -95,7 +119,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/forget <index>` — Delete a lesson by its index\n\n"
         "📊 *System*\n"
         "`/status` — Show bot status and uptime\n"
-        "`/update` — Pull the latest code and restart the bot"
+        "`/update` — Pull the latest code and restart the bot\n"
+        "`/lockdown` — Disable all shell execution (kill switch)\n"
+        "`/unlock` — Re-enable shell execution"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -103,6 +129,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     CHAT_HISTORIES[chat_id] = []
+    save_histories()
     await update.message.reply_text("🧹 Conversation history cleared. Starting fresh!")
 
 @whitelist_only
@@ -119,6 +146,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history_len = len(CHAT_HISTORIES.get(chat_id, []))
     turns_until_review = max(0, SELF_REVIEW_EVERY_N_TURNS - self_review.TURN_COUNTER)
     ctx_k = runtime_config.CURRENT_CONTEXT_LENGTH // 1000
+    shell_state = "🔓 enabled" if runtime_config.SHELL_ENABLED else "🔒 DISABLED"
+    confirm_mode = "⚠️ confirm-all" if CONFIRM_ALL_COMMANDS else "danger-only"
     
     msg = (
         f"📊 *Alfred Status*\n\n"
@@ -126,6 +155,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 Model: `{runtime_config.CURRENT_MODEL}`\n"
         f"📐 Context window: `{runtime_config.CURRENT_CONTEXT_LENGTH:,}` tokens (~{ctx_k}k)\n"
         f"🌐 Ollama: `{OLLAMA_API_URL}`\n"
+        f"🔒 Shell: {shell_state} ({confirm_mode})\n"
         f"💬 History: `{history_len}` messages in current chat\n"
         f"🧠 Lessons: `{lessons_count}` stored\n"
         f"🔍 Next self-review in: `{turns_until_review}` turns"
@@ -135,6 +165,12 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @whitelist_only
 async def shell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Run a PowerShell command directly without going through the LLM."""
+    if not runtime_config.SHELL_ENABLED:
+        await update.message.reply_text(
+            "🔒 Shell execution is disabled (lockdown). Use /unlock to re-enable."
+        )
+        return
+
     if not context.args:
         await update.message.reply_text(
             "Usage: `/shell <command>`\nExample: `/shell Get-Date`\n"
@@ -156,6 +192,8 @@ async def shell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from tools.shell_exec import run_shell, is_dangerous
     
     is_danger, reason = is_dangerous(cmd)
+    if CONFIRM_ALL_COMMANDS and not is_danger:
+        is_danger, reason = True, "Confirm-all mode is enabled — every command needs approval."
     if is_danger:
         global _direct_shell_counter
         _direct_shell_counter += 1
@@ -370,6 +408,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     self_review.TURN_COUNTER += 1
     prune_history(history)
+    save_histories()
 
 @whitelist_only
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -393,6 +432,18 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         restart_bot()
 
     asyncio.create_task(_delayed_restart())
+
+@whitelist_only
+async def lockdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kill switch — disable all shell execution remotely."""
+    runtime_config.set_shell_enabled(False)
+    await update.message.reply_text("🔒 *Lockdown enabled.* All shell execution is now disabled. Use /unlock to re-enable.", parse_mode="Markdown")
+
+@whitelist_only
+async def unlock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Re-enable shell execution after a lockdown."""
+    runtime_config.set_shell_enabled(True)
+    await update.message.reply_text("🔓 *Shell execution re-enabled.*", parse_mode="Markdown")
 
 @whitelist_only
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -466,6 +517,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     """Callback triggered after bot is initialized but before polling starts."""
+    load_histories()
+    logger.info(f"Restored {sum(len(v) for v in CHAT_HISTORIES.values())} history messages from disk.")
+
     task = asyncio.create_task(self_review.run_self_review_cycle(app.bot))
     app.bot_data["self_review_task"] = task
 
@@ -488,6 +542,8 @@ async def post_init(app: Application):
         BotCommand("correct", "Teach Alfred a new lesson"),
         BotCommand("forget",  "Delete a lesson by index"),
         BotCommand("update",  "Pull the latest code and restart the bot"),
+        BotCommand("lockdown", "Disable all shell execution (kill switch)"),
+        BotCommand("unlock",  "Re-enable shell execution"),
     ])
     logger.info("Bot command menu registered with Telegram.")
     
@@ -536,6 +592,8 @@ def main():
     app.add_handler(CommandHandler("lessons", lessons_command))
     app.add_handler(CommandHandler("forget",  forget_command))
     app.add_handler(CommandHandler("update",  update_command, block=False))
+    app.add_handler(CommandHandler("lockdown", lockdown_command))
+    app.add_handler(CommandHandler("unlock",   unlock_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text, block=False))
     app.add_handler(CallbackQueryHandler(handle_callback, block=False))
     app.add_error_handler(error_handler)

@@ -2,9 +2,21 @@
 Memory management tool for learning lessons and keeping track of conversation context.
 """
 import json
-from datetime import datetime, UTC
 import os
-from config import PROJECT_ROOT, MAX_LESSONS
+import re
+from datetime import datetime, UTC
+from config import PROJECT_ROOT, MAX_LESSONS, LOG_MAX_BYTES
+
+def _rotate_if_large(filepath: str, max_bytes: int):
+    """Rotate an append-only log once it exceeds max_bytes."""
+    try:
+        if os.path.exists(filepath) and os.path.getsize(filepath) > max_bytes:
+            backup = filepath + ".1"
+            if os.path.exists(backup):
+                os.remove(backup)
+            os.rename(filepath, backup)
+    except Exception:
+        pass
 
 def log_conversation(entry: dict):
     """
@@ -13,6 +25,7 @@ def log_conversation(entry: dict):
     filepath = os.path.join(PROJECT_ROOT, "data", "conversations.jsonl")
     entry['timestamp'] = datetime.now(UTC).isoformat()
     try:
+        _rotate_if_large(filepath, LOG_MAX_BYTES)
         with open(filepath, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry) + '\n')
     except Exception as e:
@@ -67,6 +80,26 @@ def format_lessons_for_prompt(lessons: list[dict]) -> str:
         src = l.get("source", "user").upper()
         formatted.append(f"- [{ts}] [{src}] {l.get('text')}")
     return "\n".join(formatted)
+
+def score_lesson(lesson: dict, user_message: str) -> float:
+    """Keyword-overlap score (dominant) plus a small recency bonus."""
+    text = lesson.get("text", "").lower()
+    msg = user_message.lower()
+    text_words = set(re.findall(r"\w+", text))
+    msg_words = set(re.findall(r"\w+", msg))
+    overlap = len(text_words & msg_words)
+    recency = 0.5 if lesson.get("timestamp", "")[:10] >= "2026" else 0.0
+    return overlap * 3.0 + recency
+
+def get_relevant_lessons(lessons: list[dict], user_message: str, top_n: int = 20) -> list[dict]:
+    """
+    Return the most relevant lessons for a user message: keyword overlap first,
+    most recent fill the remaining slots so some context is always included.
+    """
+    if not lessons:
+        return []
+    ranked = sorted(lessons, key=lambda l: score_lesson(l, user_message), reverse=True)
+    return ranked[:top_n]
 
 def remove_lesson(index: int) -> str:
     """Removes a lesson by 1-based index."""

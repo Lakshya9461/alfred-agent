@@ -37,9 +37,11 @@ alfred-agent/
 │   └── memory.py            # Lesson persistence, conversation logging
 ├── data/
 │   ├── lessons.json         # Persisted lessons (max MAX_LESSONS entries)
-│   ├── conversations.jsonl  # Append-only full conversation log
-│   ├── audit_log.jsonl      # Append-only shell command audit trail
-│   └── self_review_state.json  # Tracks last reviewed line pointer for self-review
+│   ├── conversations.jsonl  # Append-only full conversation log (rotated via LOG_MAX_BYTES)
+│   ├── audit_log.jsonl      # Append-only shell command audit trail (rotated via LOG_MAX_BYTES)
+│   ├── self_review_state.json  # Tracks last reviewed line pointer for self-review
+│   ├── chat_histories.json  # Persisted per-chat histories (survive restarts)
+│   └── shell_lock.json      # Kill-switch state for /lockdown (survives restarts)
 ├── logs/                    # WinSW service stdout/stderr logs
 ├── alfred-service.xml       # WinSW service config (runs as alfredsvc account)
 ├── .env                     # Secrets — NOT in git
@@ -62,6 +64,7 @@ Loads all settings from `.env` at import time. Values are **static** — they do
 Holds values that **can change at runtime** (e.g., via `/model`).
 - `CURRENT_MODEL: str` — initialised from `config.OLLAMA_MODEL`, updated by `/model` command.
 - `CURRENT_CONTEXT_LENGTH: int` — detected via `ollama_utils.get_model_context_length()` on startup and on model switch.
+- `SHELL_ENABLED: bool` — kill-switch flag. `/lockdown` sets False, `/unlock` sets True. Persisted to `data/shell_lock.json` so a lockdown survives restarts. `run_shell` refuses to execute while False.
 - **All code that sends to Ollama reads from here, not `config.py`.**
 
 ### `agent_loop.py`
@@ -70,13 +73,14 @@ Holds values that **can change at runtime** (e.g., via `/model`).
 - History management: **the user message is appended to `history` ONCE** (line ~30), then `messages` is built as `[system] + history`. Do NOT append the user message to `messages` separately — that caused a critical duplication bug (now fixed).
 - Tool iterations loop continues until no more `tool_calls` in the response or `MAX_TOOL_ITERATIONS` is hit.
 - Dangerous shell confirmations await the user's future with `asyncio.wait_for(..., CONFIRMATION_TIMEOUT_SECONDS)` — if the user never clicks, the command auto-cancels instead of hanging forever.
+- Lessons fed to the system prompt are relevance-scored via `get_relevant_lessons(lessons, user_message, MAX_LESSONS_IN_PROMPT)` — keyword overlap dominates, most-recent fills the rest — instead of dumping all `MAX_LESSONS` verbatim.
 - Passes `num_ctx: CURRENT_CONTEXT_LENGTH` in `options` so Ollama respects the detected context window.
 
 ### `telegram_bot.py`
 Central file. Key globals:
-- `CHAT_HISTORIES: Dict[int, List]` — per-chat conversation history (in-memory).
+- `CHAT_HISTORIES: Dict[int, List]` — per-chat conversation history, **persisted to `data/chat_histories.json`** and restored on startup (`load_histories`) so restarts don't wipe context.
 - `PENDING_CONFIRMATIONS: Dict[str, asyncio.Future]` — futures for agent-requested shell confirmations.
-- `DIRECT_SHELL_CACHE: Dict[str, str]` — stores full command strings for `/shell` dangerous confirmations (avoids Telegram's 64-byte callback_data limit).
+- `DIRECT_SHELL_CACHE: Dict[str, Dict]` — stores `{command, timeout}` for `/shell` dangerous confirmations (avoids Telegram's 64-byte callback_data limit).
 - `MODEL_CACHE: List[str]` — populated by `/model` command for inline keyboard index lookup.
 
 **Commands:**
@@ -93,6 +97,8 @@ Central file. Key globals:
 | `/correct <text>` | `correct_command` | Saves a user lesson |
 | `/forget <idx>` | `forget_command` | Removes a lesson by 1-based index |
 | `/update` | `update_command` | `git pull --ff-only` + restarts the bot (manual version of the auto-updater) |
+| `/lockdown` | `lockdown_command` | Kill switch — disables ALL shell execution (persisted to `shell_lock.json`) |
+| `/unlock` | `unlock_command` | Re-enables shell execution after a lockdown |
 
 **Callback routing in `handle_callback`:**
 1. `model_sel|<idx>` — switch model, detect context window, update `runtime_config`.
@@ -101,7 +107,7 @@ Central file. Key globals:
 
 **`prune_history`:** Context-aware. Keeps at most `0.6 * CURRENT_CONTEXT_LENGTH / 150` messages (~16-32 depending on model). Adapts automatically when you switch models via `/model`.
 
-**`post_init`:** Called by `python-telegram-bot` after bot init. Starts the self-review background task, the model watcher, and the git update-check task; detects startup model context window; registers command menu with Telegram.
+**`post_init`:** Called by `python-telegram-bot` after bot init. Restores chat histories from disk; starts the self-review background task, the model watcher, and the git update-check task; detects startup model context window; registers command menu with Telegram.
 
 **`post_shutdown`:** Cancels all three background tasks gracefully (prevents "Task destroyed while pending" errors on Ctrl+C).
 
@@ -131,8 +137,9 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 
 ### `tools/shell_exec.py`
 - `is_dangerous(command) -> tuple[bool, str]` — returns `(True, reason)` or `(False, "")`. Checks against `DANGEROUS_PATTERNS` regex list.
-- `run_shell(command, shell, confirmed, timeout=None)` — executes via `subprocess.run` with `encoding="utf-8", errors="replace"` (avoids cp1252 `UnicodeDecodeError` crashes on Windows). Raises `ConfirmationRequired` if dangerous and not confirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution.
+- `run_shell(command, shell, confirmed, timeout=None)` — executes via `subprocess.run` with `encoding="utf-8", errors="replace"` (avoids cp1252 `UnicodeDecodeError` crashes on Windows). **Refuses execution when `runtime_config.SHELL_ENABLED` is False (lockdown).** With `CONFIRM_ALL_COMMANDS=true` (trial mode) every command requires confirmation, not just dangerous ones. Raises `ConfirmationRequired` if unconfirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution.
 - `ConfirmationRequired` exception — caught by `agent_loop.py` to pause the generator and yield a `confirmation_required` event.
+- `log_audit` — rotates `audit_log.jsonl` once it exceeds `LOG_MAX_BYTES`.
 
 ### `tools/web_search.py`
 - `search(query, max_results)` — tries Tavily if `TAVILY_API_KEY` is set, else falls back to `duckduckgo_search` (DDGS). Returns a formatted string of results.
@@ -142,7 +149,9 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `add_lesson(text, source)` — deduplicates, appends with timestamp, prunes to `MAX_LESSONS`.
 - `remove_lesson(index)` — 1-based index removal.
 - `format_lessons_for_prompt(lessons)` — formats lessons as a bullet list for the system prompt.
-- `log_conversation(entry)` — append-only JSONL write to `data/conversations.jsonl`.
+- `score_lesson(lesson, user_message)` / `get_relevant_lessons(lessons, user_message, top_n)` — keyword-overlap scoring + recency bonus; used by `agent_loop` to feed only the top `MAX_LESSONS_IN_PROMPT` relevant lessons instead of all of them.
+- `log_conversation(entry)` — append-only JSONL write to `data/conversations.jsonl`, rotated via `LOG_MAX_BYTES`.
+- `_rotate_if_large(filepath, max_bytes)` — shared rotation helper (also used by `shell_exec.log_audit`).
 - `log_failed_command(command, stderr)` — saves auto-categorized lesson on shell failure (source="auto").
 
 ---
@@ -177,6 +186,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
         telegram_bot deletes status message, sends reply
         TURN_COUNTER += 1
         prune_history()
+        save_histories()   # persist to data/chat_histories.json
 ```
 
 ---
@@ -222,16 +232,20 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `AUTO_PULL` | — | `true` | Auto `git pull --ff-only` when behind, or only notify |
 | `CONFIRMATION_TIMEOUT_SECONDS` | — | `120` | How long to wait for a user to confirm a dangerous command before auto-cancelling |
 | `RESTART_COMMAND` | — | `` | Command to restart the bot (service mode, e.g. `.\alfred-service.exe restart`). Empty = self-respawn (dev mode) |
+| `LOG_MAX_BYTES` | — | `10485760` | Rotate `conversations.jsonl` / `audit_log.jsonl` past this size (bytes) |
+| `MAX_LESSONS_IN_PROMPT` | — | `20` | Max relevance-scored lessons fed into the system prompt |
+| `CONFIRM_ALL_COMMANDS` | — | `false` | Trial mode: require confirmation for EVERY shell command |
 
 ---
 
 ## Known Limitations & Future Work
 
 - **WSL2 from service account** — Invoking WSL from a non-interactive service account (`alfredsvc`) is unreliable. Needs manual testing. See README for details.
-- **No semantic search on lessons** — lessons are all passed verbatim into the system prompt. With 50+ lessons this could eat context. Future: vector search / relevance scoring.
-- **In-memory history only** — restarting the bot clears chat history. For persistence, write/reload `CHAT_HISTORIES` from disk on startup/shutdown.
+- **Lesson relevance is keyword-based, not semantic** — `get_relevant_lessons` uses token overlap + recency. Semantic/vector search would be more accurate but costs more.
+- **Log rotation is size-based, not time-based** — `conversations.jsonl.1` / `audit_log.jsonl.1` are kept as single rotated backups, not a dated archive.
 - **Single-user design** — history is per-chat but the bot is designed for one trusted user. Multi-user scenarios are not tested.
 - **Model context detection** — relies on `model_info` keys or `parameters` string. If Ollama changes its API format, detection may fall back to 4096.
+- **Kill switch is Telegram-only** — `/lockdown` persists to disk but still requires the bot to be reachable to take effect.
 
 ---
 

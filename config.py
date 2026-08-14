@@ -32,3 +32,12 @@ CONFIRMATION_TIMEOUT_SECONDS = int(os.getenv("CONFIRMATION_TIMEOUT_SECONDS", "12
 
 # Command used to restart the bot (e.g. service restart). Empty = respawn self (dev mode).
 RESTART_COMMAND = os.getenv("RESTART_COMMAND", "")
+
+# Max size of append-only logs before rotation (bytes)
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))
+
+# Max lessons fed into the system prompt (relevance-scored)
+MAX_LESSONS_IN_PROMPT = int(os.getenv("MAX_LESSONS_IN_PROMPT", "20"))
+
+# Trial mode: require confirmation for EVERY shell command, not just dangerous ones
+CONFIRM_ALL_COMMANDS = os.getenv("CONFIRM_ALL_COMMANDS", "false").lower() in ("1", "true", "yes", "on")
