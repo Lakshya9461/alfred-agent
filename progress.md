@@ -28,20 +28,22 @@ alfred-agent/
 ├── agent_loop.py            # Core Ollama tool-calling async generator loop
 ├── telegram_bot.py          # All Telegram handlers, commands, callbacks, wiring
 ├── self_review.py           # Background asyncio task: periodic conversation self-review
-├── monitor.py               # Background tasks: new-model watcher + auto git update check/pull
+├── monitor.py               # Background tasks: new-model watcher, auto git update check/pull, cron reminder scheduler
 ├── ollama_utils.py          # Async helpers: list models, detect context window
 ├── tools/
 │   ├── __init__.py          # Tool registry + execute_tool dispatcher
 │   ├── web_search.py        # Tavily (if key) or DuckDuckGo search
 │   ├── shell_exec.py        # PowerShell/WSL execution, dangerous pattern detection
-│   └── memory.py            # Lesson persistence, conversation logging
+│   ├── memory.py            # Lesson persistence, conversation logging
+│   └── cron.py              # Cron-style reminders (persisted, fired by scheduler)
 ├── data/
 │   ├── lessons.json         # Persisted lessons (max MAX_LESSONS entries)
 │   ├── conversations.jsonl  # Append-only full conversation log (rotated via LOG_MAX_BYTES)
 │   ├── audit_log.jsonl      # Append-only shell command audit trail (rotated via LOG_MAX_BYTES)
 │   ├── self_review_state.json  # Tracks last reviewed line pointer for self-review
 │   ├── chat_histories.json  # Persisted per-chat histories (survive restarts)
-│   └── shell_lock.json      # Kill-switch state for /lockdown (survives restarts)
+│   ├── shell_lock.json      # Kill-switch state for /lockdown (survives restarts)
+│   └── cron_jobs.json       # Scheduled reminders (survive restarts)
 ├── logs/                    # WinSW service stdout/stderr logs
 ├── alfred-service.xml       # WinSW service config (runs as alfredsvc account)
 ├── .env                     # Secrets — NOT in git
@@ -96,6 +98,7 @@ Central file. Key globals:
 | `/lessons` | `lessons_command` | Lists stored lessons |
 | `/correct <text>` | `correct_command` | Saves a user lesson |
 | `/forget <idx>` | `forget_command` | Removes a lesson by 1-based index |
+| `/cron` | `cron_command` | Lists scheduled reminders; `/cron cancel <id>` cancels one |
 | `/update` | `update_command` | `git pull --ff-only` + restarts the bot (manual version of the auto-updater) |
 | `/lockdown` | `lockdown_command` | Kill switch — disables ALL shell execution (persisted to `shell_lock.json`) |
 | `/unlock` | `unlock_command` | Re-enables shell execution after a lockdown |
@@ -129,6 +132,15 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed.
 - `pull_updates() -> (message, changed)` — manual update for `/update`; fetches and ff-pulls, returns a Telegram-ready message and whether anything changed.
 - `restart_bot()` — restarts the process. If `RESTART_COMMAND` is set (service mode, e.g. `.\alfred-service.exe restart`) it is executed; otherwise the bot respawns itself (`python main.py`) in dev mode. Current process exits via `os._exit(0)`.
+- `run_cron_scheduler(bot)` — every `CRON_CHECK_INTERVAL` seconds, calls `cron.fire_due_jobs()` in a worker thread and sends each due reminder to all `ALLOWED_USER_IDS` via Telegram.
+
+### `tools/cron.py`
+- Standard 5-field cron reminders (`minute hour dom month dow`, dow 0-6 with 0=Sunday). Persisted to `data/cron_jobs.json`.
+- `add_job(message, cron, repeat, source)` — validates the cron and adds a job; returns a status string for the model to report back.
+- `list_jobs()` / `remove_job(job_id)` — management.
+- `fire_due_jobs()` — thread-safe; returns jobs whose cron matches the current minute, stamps `last_fired` (fires at most once/minute), and deactivates one-shot jobs (`repeat=False`) after firing. Missed slots while the bot was down are simply skipped (cron semantics).
+- Matcher supports `*`, `*/n`, `a-b`, `a,b`; validated against bounds (59/23/31/12/7).
+- Exposed to the model as tools `schedule_reminder`, `list_reminders`, `remove_reminder`. User can also manage via `/cron` and `/cron cancel <id>`.
 
 ### `tools/__init__.py`
 - `TOOL_REGISTRY` dict: maps tool name → `{schema, func}`.
@@ -213,6 +225,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 16 | Concurrent JSONL appends lost lines on Windows (~20% dropped under load) | Windows `open(..., "a")` is not thread-atomic; serialized all JSONL writes through a shared `threading.Lock` (`_append_jsonl` in `tools/memory.py`) |
 | 17 | Fresh clone had no `data/` dir (gitignored) → every log/memory write failed with `Errno 2` | `config.py` now does `os.makedirs(DATA_DIR)` at import; write paths (`_append_jsonl`, `_save_lessons`, `save_histories`) defensively create it too |
 | 18 | `log_failed_command` was never called — the "learn from failed commands" feature was dead code | Wired into `run_shell`: non-zero exit + stderr, timeouts, and exceptions now auto-save an `AUTO` lesson (deduped) that is relevance-fed back into the prompt |
+| — | **Feature: cron reminders** | New `tools/cron.py` (5-field cron matcher, persisted `data/cron_jobs.json`), `schedule_reminder`/`list_reminders`/`remove_reminder` tools so the model schedules reminders autonomously, `monitor.run_cron_scheduler` background task fires due jobs as Telegram messages, `/cron` + `/cron cancel <id>` commands, `CRON_CHECK_INTERVAL` env var |
 
 ---
 
@@ -232,6 +245,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `MAX_LESSONS` | — | `50` | Max lessons to retain |
 | `MODEL_CHECK_INTERVAL` | — | `60` | Seconds between checks for newly installed models |
 | `GIT_UPDATE_CHECK_INTERVAL` | — | `300` | Seconds between git update checks |
+| `CRON_CHECK_INTERVAL` | — | `20` | Seconds between checks for due cron reminders |
 | `AUTO_PULL` | — | `true` | Auto `git pull --ff-only` when behind, or only notify |
 | `CONFIRMATION_TIMEOUT_SECONDS` | — | `120` | How long to wait for a user to confirm a dangerous command before auto-cancelling |
 | `RESTART_COMMAND` | — | `` | Command to restart the bot (service mode, e.g. `.\alfred-service.exe restart`). Empty = self-respawn (dev mode) |

@@ -9,6 +9,7 @@ from typing import Callable, Dict, Any
 from .web_search import search
 from .shell_exec import run_shell, ConfirmationRequired
 from .memory import add_lesson
+from .cron import add_job, list_jobs, remove_job
 
 TOOL_REGISTRY = {
     "web_search": {
@@ -83,6 +84,78 @@ TOOL_REGISTRY = {
             }
         },
         "func": add_lesson
+    },
+    "schedule_reminder": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "schedule_reminder",
+                "description": (
+                    "Schedules a one-time or recurring reminder that will be sent to the user "
+                    "via Telegram at the scheduled time. Use this when the user asks to be "
+                    "reminded about something (e.g. 'remind me at 5pm', 'remind me every "
+                    "morning at 9', 'nudge me every 30 minutes'). The 'cron' argument uses "
+                    "standard 5-field cron syntax: minute hour day-of-month month day-of-week. "
+                    "day-of-week is 0-6 where 0=Sunday. Examples: '0 17 * * *' = every day at "
+                    "17:00; '0 9 * * 1' = every Monday at 09:00; '*/30 * * * *' = every 30 "
+                    "minutes; '0 9 1 * *' = on the 1st of each month at 09:00. For a one-time "
+                    "reminder, set repeat=false and pick the minute/hour the user asked for."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The reminder text to send to the user."
+                        },
+                        "cron": {
+                            "type": "string",
+                            "description": "5-field cron schedule (minute hour dom month dow)."
+                        },
+                        "repeat": {
+                            "type": "boolean",
+                            "description": "True for a recurring reminder, false for a one-time reminder. Default true."
+                        }
+                    },
+                    "required": ["message", "cron"]
+                }
+            }
+        },
+        "func": add_job
+    },
+    "list_reminders": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "list_reminders",
+                "description": "Lists all currently scheduled reminders (ID, cron schedule, repeat flag, status, message).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        "func": list_jobs
+    },
+    "remove_reminder": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "remove_reminder",
+                "description": "Cancels a scheduled reminder by its ID. Use list_reminders first to find the ID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The ID of the reminder to cancel (e.g. '3f9c2ab1')."
+                        }
+                    },
+                    "required": ["job_id"]
+                }
+            }
+        },
+        "func": remove_job
     }
 }
 

@@ -118,6 +118,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/lessons` — List all lessons Alfred has learned\n"
         "`/correct <text>` — Teach Alfred a new lesson\n"
         "`/forget <index>` — Delete a lesson by its index\n\n"
+        "⏰ *Reminders*\n"
+        "`/cron` — List scheduled reminders\n"
+        "`/cron cancel <id>` — Cancel a scheduled reminder\n\n"
         "📊 *System*\n"
         "`/status` — Show bot status and uptime\n"
         "`/update` — Pull the latest code and restart the bot\n"
@@ -325,6 +328,36 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(res)
 
 @whitelist_only
+async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List scheduled reminders, or cancel one with `/cron cancel <id>`."""
+    from tools.cron import list_jobs, remove_job
+
+    args = context.args or []
+    if args and args[0].lower() == "cancel":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: `/cron cancel <id>`", parse_mode="Markdown")
+            return
+        await update.message.reply_text(remove_job(args[1]))
+        return
+
+    jobs = list_jobs()
+    if not jobs:
+        await update.message.reply_text(
+            "⏰ No reminders scheduled yet. Ask me to remind you about something "
+            "(e.g. \"remind me every day at 9am to check the server\")."
+        )
+        return
+
+    lines = []
+    for j in jobs:
+        status = "✅" if j.get("active", True) else "⏹"
+        rep = "🔁 repeat" if j.get("repeat", True) else "🔂 once"
+        msg = (j.get("message") or "").replace("\n", " ")[:60]
+        lines.append(f"`{j.get('id')}` | `{j.get('cron')}` | {rep} | {status} | {msg}")
+    reply = "⏰ *Scheduled reminders:*\n\n" + "\n".join(lines)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+@whitelist_only
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
     chat_id = update.effective_chat.id
@@ -529,6 +562,9 @@ async def post_init(app: Application):
 
     update_task = asyncio.create_task(monitor.check_for_updates(app.bot))
     app.bot_data["update_task"] = update_task
+
+    cron_task = asyncio.create_task(monitor.run_cron_scheduler(app.bot))
+    app.bot_data["cron_task"] = cron_task
     
     # Register the command menu so it appears in the Telegram UI
     await app.bot.set_my_commands([
@@ -542,6 +578,7 @@ async def post_init(app: Application):
         BotCommand("lessons", "List all stored lessons"),
         BotCommand("correct", "Teach Alfred a new lesson"),
         BotCommand("forget",  "Delete a lesson by index"),
+        BotCommand("cron",    "List scheduled reminders"),
         BotCommand("update",  "Pull the latest code and restart the bot"),
         BotCommand("lockdown", "Disable all shell execution (kill switch)"),
         BotCommand("unlock",  "Re-enable shell execution"),
@@ -555,7 +592,7 @@ async def post_init(app: Application):
 
 async def post_shutdown(app: Application):
     """Callback triggered during application shutdown."""
-    for key in ("self_review_task", "models_task", "update_task"):
+    for key in ("self_review_task", "models_task", "update_task", "cron_task"):
         task = app.bot_data.get(key)
         if task:
             task.cancel()
@@ -592,6 +629,7 @@ def main():
     app.add_handler(CommandHandler("correct", correct_command))
     app.add_handler(CommandHandler("lessons", lessons_command))
     app.add_handler(CommandHandler("forget",  forget_command))
+    app.add_handler(CommandHandler("cron",    cron_command))
     app.add_handler(CommandHandler("update",  update_command, block=False))
     app.add_handler(CommandHandler("lockdown", lockdown_command))
     app.add_handler(CommandHandler("unlock",   unlock_command))

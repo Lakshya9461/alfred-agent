@@ -15,8 +15,10 @@ from config import (
     MODEL_CHECK_INTERVAL,
     GIT_UPDATE_CHECK_INTERVAL,
     AUTO_PULL,
+    CRON_CHECK_INTERVAL,
 )
 import ollama_utils
+from tools import cron as cron_tools
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,27 @@ async def monitor_models(bot):
                 except Exception as e:
                     logger.error(f"monitor_models: failed to notify {user_id}: {e}")
         known = models
+
+
+async def run_cron_scheduler(bot):
+    """
+    Periodically fire due cron reminders. A job fires at most once per minute.
+    Fired reminders are sent as Telegram messages to all allowed users.
+    """
+    await asyncio.sleep(10)  # small initial delay so startup isn't interrupted
+    while True:
+        try:
+            due = await asyncio.to_thread(cron_tools.fire_due_jobs)
+            for job in due:
+                msg = f"⏰ *Reminder:* {job.get('message', '')}"
+                for user_id in TELEGRAM_ALLOWED_USER_IDS:
+                    try:
+                        await bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+                    except Exception as e:
+                        logger.error(f"run_cron_scheduler: failed to notify {user_id}: {e}")
+        except Exception as e:
+            logger.error(f"run_cron_scheduler: {e}")
+        await asyncio.sleep(CRON_CHECK_INTERVAL)
 
 
 async def check_for_updates(bot):
