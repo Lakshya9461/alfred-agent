@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, List
 from dataclasses import dataclass
 
-from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS
+from config import OLLAMA_API_URL, MAX_TOOL_ITERATIONS, CONFIRMATION_TIMEOUT_SECONDS
 import runtime_config
 from tools import get_tool_schemas, execute_tool
 from tools.shell_exec import ConfirmationRequired
@@ -118,7 +118,11 @@ LESSONS FROM PAST INTERACTIONS:
                         )
                         # Pause execution until the telegram layer sets the future's result
                         try:
-                            confirmed = await future
+                            confirmed = await asyncio.wait_for(
+                                future, timeout=CONFIRMATION_TIMEOUT_SECONDS
+                            )
+                        except asyncio.TimeoutError:
+                            confirmed = False
                         except Exception:
                             confirmed = False
                             

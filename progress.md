@@ -69,6 +69,7 @@ Holds values that **can change at runtime** (e.g., via `/model`).
 - Event types: `tool_call_requested`, `confirmation_required`, `tool_result`, `final_answer`, `error`.
 - History management: **the user message is appended to `history` ONCE** (line ~30), then `messages` is built as `[system] + history`. Do NOT append the user message to `messages` separately — that caused a critical duplication bug (now fixed).
 - Tool iterations loop continues until no more `tool_calls` in the response or `MAX_TOOL_ITERATIONS` is hit.
+- Dangerous shell confirmations await the user's future with `asyncio.wait_for(..., CONFIRMATION_TIMEOUT_SECONDS)` — if the user never clicks, the command auto-cancels instead of hanging forever.
 - Passes `num_ctx: CURRENT_CONTEXT_LENGTH` in `options` so Ollama respects the detected context window.
 
 ### `telegram_bot.py`
@@ -84,13 +85,14 @@ Central file. Key globals:
 | `/start` | `start_command` | Greeting |
 | `/help` | `help_command` | Full command list |
 | `/model` | `model_command` | Fetches models from Ollama, shows inline keyboard |
-| `/shell <cmd>` | `shell_command` | Runs directly (no LLM), dangerous commands need confirmation |
+| `/shell <cmd>` | `shell_command` | Runs directly (no LLM), dangerous commands need confirmation. Optional `--timeout <secs>` prefix for long-running commands |
 | `/search <q>` | `search_command` | Runs web search directly (no LLM) |
 | `/status` | `status_command` | Uptime, model, context window, history size, lesson count |
 | `/clear` | `clear_command` | Wipes in-memory chat history |
 | `/lessons` | `lessons_command` | Lists stored lessons |
 | `/correct <text>` | `correct_command` | Saves a user lesson |
 | `/forget <idx>` | `forget_command` | Removes a lesson by 1-based index |
+| `/update` | `update_command` | `git pull --ff-only` + restarts the bot (manual version of the auto-updater) |
 
 **Callback routing in `handle_callback`:**
 1. `model_sel|<idx>` — switch model, detect context window, update `runtime_config`.
@@ -119,20 +121,22 @@ Central file. Key globals:
 Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `monitor_models(bot)` — every `MODEL_CHECK_INTERVAL` seconds, fetches the Ollama model list. The first successful fetch sets a baseline; any model that appears later triggers a Telegram notification to all `ALLOWED_USER_IDS`. No spam on startup/Ollama downtime because baseline only sets on a successful fetch.
 - `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed.
+- `pull_updates() -> (message, changed)` — manual update for `/update`; fetches and ff-pulls, returns a Telegram-ready message and whether anything changed.
+- `restart_bot()` — restarts the process. If `RESTART_COMMAND` is set (service mode, e.g. `.\alfred-service.exe restart`) it is executed; otherwise the bot respawns itself (`python main.py`) in dev mode. Current process exits via `os._exit(0)`.
 
 ### `tools/__init__.py`
 - `TOOL_REGISTRY` dict: maps tool name → `{schema, func}`.
 - `get_tool_schemas()` — returns list of Ollama-compatible JSON schema dicts.
-- `execute_tool(name, arguments)` — dispatches to the registered function. Uses `inspect.iscoroutinefunction` (not the deprecated `asyncio.iscoroutinefunction`) for Python 3.14 compatibility.
+- `execute_tool(name, arguments)` — dispatches to the registered function. Uses `inspect.iscoroutinefunction` (not the deprecated `asyncio.iscoroutinefunction`) for Python 3.14 compatibility. **Sync tools (`run_shell`, `web_search`, `add_lesson`) run via `asyncio.to_thread`** so blocking I/O never freezes the event loop.
 
 ### `tools/shell_exec.py`
 - `is_dangerous(command) -> tuple[bool, str]` — returns `(True, reason)` or `(False, "")`. Checks against `DANGEROUS_PATTERNS` regex list.
-- `run_shell(command, shell, confirmed)` — executes via `subprocess.run`. Raises `ConfirmationRequired` if dangerous and not confirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution.
+- `run_shell(command, shell, confirmed, timeout=None)` — executes via `subprocess.run` with `encoding="utf-8", errors="replace"` (avoids cp1252 `UnicodeDecodeError` crashes on Windows). Raises `ConfirmationRequired` if dangerous and not confirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution.
 - `ConfirmationRequired` exception — caught by `agent_loop.py` to pause the generator and yield a `confirmation_required` event.
 
 ### `tools/web_search.py`
 - `search(query, max_results)` — tries Tavily if `TAVILY_API_KEY` is set, else falls back to `duckduckgo_search` (DDGS). Returns a formatted string of results.
-- **Note:** Both providers are called synchronously (blocking). This is acceptable since `execute_tool` runs them in the same event loop thread, but for very slow searches this could block other coroutines. Future improvement: run in `asyncio.to_thread()`.
+- Both providers are synchronous but are dispatched through `asyncio.to_thread` by `execute_tool`, so they no longer block the event loop.
 
 ### `tools/memory.py`
 - `add_lesson(text, source)` — deduplicates, appends with timestamp, prunes to `MAX_LESSONS`.
@@ -192,6 +196,10 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 9 | `asyncio.iscoroutinefunction` deprecation (Python 3.14) | Switched to `inspect.iscoroutinefunction` in `tools/__init__.py` |
 | 10 | `is_dangerous` returned `bool`, callers needed a reason string | Changed return type to `tuple[bool, str]` |
 | 11 | Stale `is_dangerous` self-test in `tools/shell_exec.py` | Updated `__main__` test block to unpack the `(bool, reason)` tuple (missed when return type changed in bug #10) |
+| 12 | `UnicodeDecodeError` in subprocess reader thread on Windows (`charmap`/cp1252) crashed/could hang `subprocess.run` when a command output UTF-8 (e.g. `ollama pull` progress) | `encoding="utf-8", errors="replace"` in `run_shell` and `monitor._git` |
+| 13 | Sync tools (`run_shell`, `web_search`) blocked the async event loop; a slow DDGS search or 30s shell command froze the whole bot | `execute_tool` runs sync tools via `asyncio.to_thread`; `/shell` handlers also use `asyncio.to_thread` |
+| 14 | `await future` on shell confirmation waited forever — a turn hung indefinitely if the user never clicked ✅/❌ | `asyncio.wait_for(future, CONFIRMATION_TIMEOUT_SECONDS)` auto-cancels the command (default 120s) |
+| 15 | `/shell ollama pull ...` died at the 30s default timeout | Added optional `--timeout <secs>` prefix to `/shell` (e.g. `/shell --timeout 600 ollama pull deepseek-r1:14b`) |
 
 ---
 
@@ -212,12 +220,13 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `MODEL_CHECK_INTERVAL` | — | `60` | Seconds between checks for newly installed models |
 | `GIT_UPDATE_CHECK_INTERVAL` | — | `300` | Seconds between git update checks |
 | `AUTO_PULL` | — | `true` | Auto `git pull --ff-only` when behind, or only notify |
+| `CONFIRMATION_TIMEOUT_SECONDS` | — | `120` | How long to wait for a user to confirm a dangerous command before auto-cancelling |
+| `RESTART_COMMAND` | — | `` | Command to restart the bot (service mode, e.g. `.\alfred-service.exe restart`). Empty = self-respawn (dev mode) |
 
 ---
 
 ## Known Limitations & Future Work
 
-- **`web_search` is synchronous** — runs blocking I/O in the async event loop. Should be wrapped in `asyncio.to_thread()` for responsiveness under load.
 - **WSL2 from service account** — Invoking WSL from a non-interactive service account (`alfredsvc`) is unreliable. Needs manual testing. See README for details.
 - **No semantic search on lessons** — lessons are all passed verbatim into the system prompt. With 50+ lessons this could eat context. Future: vector search / relevance scoring.
 - **In-memory history only** — restarting the bot clears chat history. For persistence, write/reload `CHAT_HISTORIES` from disk on startup/shutdown.

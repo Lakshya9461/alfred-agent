@@ -41,8 +41,8 @@ START_TIME = time.time()
 # Temporary cache of model names for /model inline keyboard
 MODEL_CACHE: list = []
 
-# Cache for /shell dangerous command confirmations: short_id -> cmd string
-DIRECT_SHELL_CACHE: Dict[str, str] = {}
+# Cache for /shell dangerous command confirmations: short_id -> {"command", "timeout"}
+DIRECT_SHELL_CACHE: Dict[str, Dict[str, Any]] = {}
 _direct_shell_counter = 0
 
 def get_chat_history(chat_id: int) -> List[Dict[str, Any]]:
@@ -87,14 +87,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/help` — Show this help message\n"
         "`/clear` — Clear your conversation history\n\n"
         "🛠 *Tools*\n"
-        "`/shell <command>` — Run a PowerShell command directly\n"
+        "`/shell <command>` — Run a PowerShell command directly (use `--timeout <secs>` for long tasks)\n"
         "`/search <query>` — Search the web for something\n\n"
         "🧠 *Memory*\n"
         "`/lessons` — List all lessons Alfred has learned\n"
         "`/correct <text>` — Teach Alfred a new lesson\n"
         "`/forget <index>` — Delete a lesson by its index\n\n"
         "📊 *System*\n"
-        "`/status` — Show bot status and uptime"
+        "`/status` — Show bot status and uptime\n"
+        "`/update` — Pull the latest code and restart the bot"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -136,12 +137,20 @@ async def shell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Run a PowerShell command directly without going through the LLM."""
     if not context.args:
         await update.message.reply_text(
-            "Usage: `/shell <command>`\nExample: `/shell Get-Date`",
+            "Usage: `/shell <command>`\nExample: `/shell Get-Date`\n"
+            "Long-running? Prepend `--timeout <seconds>`.",
             parse_mode="Markdown"
         )
         return
     
-    cmd = " ".join(context.args)
+    # Optional leading --timeout <secs> for long-running commands
+    timeout = None
+    args = list(context.args)
+    if len(args) >= 2 and args[0] == "--timeout" and args[1].isdigit():
+        timeout = int(args[1])
+        args = args[2:]
+    
+    cmd = " ".join(args)
     status_msg = await update.message.reply_text(f"💻 Running: `{cmd[:80]}`...", parse_mode="Markdown")
     
     from tools.shell_exec import run_shell, is_dangerous
@@ -151,7 +160,7 @@ async def shell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global _direct_shell_counter
         _direct_shell_counter += 1
         shell_id = f"ds{_direct_shell_counter}"
-        DIRECT_SHELL_CACHE[shell_id] = cmd
+        DIRECT_SHELL_CACHE[shell_id] = {"command": cmd, "timeout": timeout}
         keyboard = [[
             InlineKeyboardButton("✅ Run", callback_data=f"direct_shell|yes|{shell_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"direct_shell|no|{shell_id}"),
@@ -163,7 +172,7 @@ async def shell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    result = run_shell(cmd)
+    result = await asyncio.to_thread(run_shell, cmd, "powershell", False, timeout)
     stdout = result.get("stdout", "").strip()
     stderr = result.get("stderr", "").strip()
     rc = result.get("returncode", -1)
@@ -363,6 +372,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prune_history(history)
 
 @whitelist_only
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pull the latest code from the remote and restart the bot."""
+    from monitor import pull_updates, restart_bot
+
+    status_msg = await update.message.reply_text("🔄 Checking for updates...")
+
+    msg, changed = await asyncio.to_thread(pull_updates)
+
+    if not changed:
+        await status_msg.edit_text(msg, parse_mode="Markdown")
+        return
+
+    await status_msg.edit_text(
+        msg + "\n\n♻️ *Restarting in 3 seconds...*", parse_mode="Markdown"
+    )
+
+    async def _delayed_restart():
+        await asyncio.sleep(3)
+        restart_bot()
+
+    asyncio.create_task(_delayed_restart())
+
+@whitelist_only
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -399,15 +431,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("|", 2)
         action = parts[1] if len(parts) > 1 else "no"
         shell_id = parts[2] if len(parts) > 2 else ""
-        cmd = DIRECT_SHELL_CACHE.pop(shell_id, None)
+        entry = DIRECT_SHELL_CACHE.pop(shell_id, None)
         
-        if action == "no" or not cmd:
+        if action == "no" or not entry:
             await query.edit_message_text("*❌ Command cancelled.*", parse_mode="Markdown")
             return
         
+        cmd = entry["command"]
+        timeout = entry.get("timeout")
         await query.edit_message_text(f"💻 Running: `{cmd[:80]}`...", parse_mode="Markdown")
         from tools.shell_exec import run_shell
-        result = run_shell(cmd, confirmed=True)
+        result = await asyncio.to_thread(run_shell, cmd, "powershell", True, timeout)
         stdout = result.get("stdout", "").strip()
         stderr = result.get("stderr", "").strip()
         rc = result.get("returncode", -1)
@@ -453,6 +487,7 @@ async def post_init(app: Application):
         BotCommand("lessons", "List all stored lessons"),
         BotCommand("correct", "Teach Alfred a new lesson"),
         BotCommand("forget",  "Delete a lesson by index"),
+        BotCommand("update",  "Pull the latest code and restart the bot"),
     ])
     logger.info("Bot command menu registered with Telegram.")
     
@@ -500,6 +535,7 @@ def main():
     app.add_handler(CommandHandler("correct", correct_command))
     app.add_handler(CommandHandler("lessons", lessons_command))
     app.add_handler(CommandHandler("forget",  forget_command))
+    app.add_handler(CommandHandler("update",  update_command, block=False))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text, block=False))
     app.add_handler(CallbackQueryHandler(handle_callback, block=False))
     app.add_error_handler(error_handler)

@@ -5,7 +5,9 @@ Background monitoring tasks:
 """
 import asyncio
 import logging
+import os
 import subprocess
+import sys
 
 from config import (
     PROJECT_ROOT,
@@ -84,6 +86,8 @@ def _git(*args: str) -> subprocess.CompletedProcess:
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 
@@ -127,3 +131,45 @@ def _check_and_pull() -> list[str]:
             f"`{pull.stderr.strip()[:300]}`"
         )
     return messages
+
+
+def pull_updates() -> tuple[str, bool]:
+    """
+    Fetch origin and ff-pull the remote (manual trigger for /update).
+    Returns (message, changed) where changed is True only if a pull succeeded.
+    """
+    fetch = _git("fetch", "origin")
+    if fetch.returncode != 0:
+        return (f"❌ *git fetch failed:*\n`{fetch.stderr.strip()[:500]}`", False)
+
+    head = _git("rev-parse", "HEAD").stdout.strip()
+    upstream = _git("rev-parse", "@{u}").stdout.strip()
+    if not upstream:
+        return ("⚠️ No upstream branch is configured — can't auto-update.", False)
+    if head == upstream:
+        return ("✅ Already up to date.", False)
+
+    pull = _git("pull", "--ff-only")
+    if pull.returncode != 0:
+        return (f"❌ *git pull failed:*\n`{pull.stderr.strip()[:500]}`", False)
+
+    new_head = _git("log", "-1", "--oneline").stdout.strip()
+    return (f"✅ *Updated to* `{new_head}`", True)
+
+
+def restart_bot() -> None:
+    """
+    Restart the bot process.
+    If RESTART_COMMAND is set (service mode) it is executed; otherwise the bot
+    respawns itself (dev mode). The current process then exits immediately.
+    """
+    from config import RESTART_COMMAND
+
+    kwargs = {
+        "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    }
+    if RESTART_COMMAND:
+        subprocess.Popen(RESTART_COMMAND, shell=True, **kwargs)
+    else:
+        subprocess.Popen([sys.executable, "main.py"], cwd=PROJECT_ROOT, **kwargs)
+    os._exit(0)

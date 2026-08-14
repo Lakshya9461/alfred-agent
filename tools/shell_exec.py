@@ -39,7 +39,7 @@ def is_dangerous(command: str) -> tuple[bool, str]:
             return True, f"Matched dangerous pattern: `{pattern}`"
     return False, ""
 
-def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", confirmed: bool = False) -> dict:
+def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", confirmed: bool = False, timeout: int | None = None) -> dict:
     """
     Executes a shell command. Raises ConfirmationRequired if dangerous and not confirmed.
     """
@@ -62,7 +62,9 @@ def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", 
             cwd=SHELL_WORKING_DIR,
             capture_output=True,
             text=True,
-            timeout=SHELL_TIMEOUT_SECONDS
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout if timeout is not None else SHELL_TIMEOUT_SECONDS
         )
         
         stdout = process.stdout

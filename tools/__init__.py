@@ -3,6 +3,8 @@ Tool registry.
 Maps tool names to their corresponding functions and schemas.
 """
 import json
+import asyncio
+import inspect
 from typing import Callable, Dict, Any
 from .web_search import search
 from .shell_exec import run_shell, ConfirmationRequired
@@ -99,12 +101,13 @@ async def execute_tool(name: str, arguments: dict) -> str:
         return f"Tool {name} not found."
     
     func = TOOL_REGISTRY[name]["func"]
-    import inspect
     
     if inspect.iscoroutinefunction(func):
         result = await func(**arguments)
     else:
-        result = func(**arguments)
+        # Run sync tools (shell, web search, memory) in a worker thread so
+        # blocking I/O never freezes the event loop.
+        result = await asyncio.to_thread(func, **arguments)
         
     # Standardize output for shell exec and others
     if isinstance(result, dict) or isinstance(result, list):

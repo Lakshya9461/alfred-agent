@@ -26,3 +26,9 @@ MAX_LESSONS = int(os.getenv("MAX_LESSONS", "50"))
 MODEL_CHECK_INTERVAL = int(os.getenv("MODEL_CHECK_INTERVAL", "60"))
 GIT_UPDATE_CHECK_INTERVAL = int(os.getenv("GIT_UPDATE_CHECK_INTERVAL", "300"))
 AUTO_PULL = os.getenv("AUTO_PULL", "true").lower() in ("1", "true", "yes", "on")
+
+# Seconds to wait for a user to confirm a dangerous command before auto-cancelling
+CONFIRMATION_TIMEOUT_SECONDS = int(os.getenv("CONFIRMATION_TIMEOUT_SECONDS", "120"))
+
+# Command used to restart the bot (e.g. service restart). Empty = respawn self (dev mode).
+RESTART_COMMAND = os.getenv("RESTART_COMMAND", "")
