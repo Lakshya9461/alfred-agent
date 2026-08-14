@@ -9,7 +9,7 @@ from typing import Callable, Dict, Any
 from .web_search import search
 from .shell_exec import run_shell, ConfirmationRequired
 from .memory import add_lesson
-from .cron import add_job, list_jobs, remove_job
+from .cron import add_job, add_batch, list_jobs, remove_job
 
 TOOL_REGISTRY = {
     "web_search": {
@@ -156,6 +156,58 @@ TOOL_REGISTRY = {
             }
         },
         "func": remove_job
+    },
+    "schedule_batch_reminders": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "schedule_batch_reminders",
+                "description": (
+                    "Schedules MANY weekly-recurring class/timetable reminders in a single call. "
+                    "Use this when the user provides a weekly timetable and wants a reminder before "
+                    "each class. Each entry needs: day (0=Sunday, 1=Monday, ..., 6=Saturday), "
+                    "time (24h 'HH:MM' class start), course, and room. A reminder fires "
+                    "lead_minutes before every class and includes the course name and room number."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entries": {
+                            "type": "array",
+                            "description": "List of classes to schedule.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "day": {
+                                        "type": "integer",
+                                        "description": "0=Sunday, 1=Monday, ..., 6=Saturday"
+                                    },
+                                    "time": {
+                                        "type": "string",
+                                        "description": "Class start time in 24h format, e.g. '09:00' or '14:30'"
+                                    },
+                                    "course": {
+                                        "type": "string",
+                                        "description": "Course or subject name"
+                                    },
+                                    "room": {
+                                        "type": "string",
+                                        "description": "Room number or location, e.g. 'TB114' or 'BYOD'"
+                                    }
+                                },
+                                "required": ["day", "time", "course", "room"]
+                            }
+                        },
+                        "lead_minutes": {
+                            "type": "integer",
+                            "description": "Minutes before the class to fire the reminder. Default 15."
+                        }
+                    },
+                    "required": ["entries"]
+                }
+            }
+        },
+        "func": add_batch
     }
 }
 

@@ -68,11 +68,80 @@ def add_job(message: str, cron: str, repeat: bool = True, source: str = "model")
     return f"Reminder scheduled. ID: `{job['id']}` | cron `{cron}` | repeat={repeat}"
 
 
+DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+
+def add_batch(entries: list[dict], lead_minutes: int = 15) -> str:
+    """
+    Schedule many weekly class reminders in one call (timetables).
+    Each entry: {"day": 0-6 (0=Sunday), "time": "HH:MM", "course": str, "room": str}
+    Creates a weekly-recurring cron job that fires `lead_minutes` before class.
+    """
+    if not isinstance(entries, list) or not entries:
+        return "No timetable entries provided."
+
+    try:
+        lead = int(lead_minutes)
+    except (TypeError, ValueError):
+        lead = 15
+    lead = min(max(lead, 0), 60)
+
+    created = []
+    skipped = []
+    with _LOCK:
+        jobs = load_jobs()
+        for e in entries:
+            try:
+                course = str(e.get("course", "")).strip()
+                room = str(e.get("room", "")).strip()
+                day = int(e.get("day", -1))
+                time_str = str(e.get("time", "")).strip()
+                if not course or not room:
+                    skipped.append(f"'{course or time_str}': missing course/room")
+                    continue
+                if not (0 <= day <= 6):
+                    skipped.append(f"'{course}': invalid day {day}")
+                    continue
+                try:
+                    hh, mm = time_str.split(":")
+                    hour, minute = int(hh), int(mm)
+                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                        raise ValueError
+                except Exception:
+                    skipped.append(f"'{course}': invalid time '{time_str}'")
+                    continue
+
+                start_total = hour * 60 + minute
+                fire_total = (start_total - lead) % (24 * 60)
+                cron = f"{fire_total % 60} {fire_total // 60} * * {day}"
+                msg = f"{course} — Room {room} · starts {DAY_NAMES[day]} {hour:02d}:{minute:02d}"
+
+                job = {
+                    "id": uuid.uuid4().hex[:8],
+                    "message": msg,
+                    "cron": cron,
+                    "repeat": True,
+                    "source": "timetable",
+                    "last_fired": None,
+                    "created_at": datetime.now().isoformat(),
+                    "active": True,
+                }
+                jobs.append(job)
+                created.append(f"{course} · {DAY_NAMES[day]} {hour:02d}:{minute:02d} · {room}")
+            except Exception as exc:
+                skipped.append(str(exc))
+        if created:
+            _save_jobs(jobs)
+
+    summary = f"Scheduled {len(created)} class reminders ({lead} min before each class)."
+    if skipped:
+        summary += f"\nSkipped {len(skipped)} invalid entries: " + "; ".join(skipped[:3])
+    return summary
+
+
 def list_jobs() -> list[dict]:
     with _LOCK:
         return load_jobs()
-
-
 def remove_job(job_id: str) -> str:
     with _LOCK:
         jobs = load_jobs()

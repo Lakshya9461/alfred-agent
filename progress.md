@@ -141,7 +141,8 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `list_jobs()` / `remove_job(job_id)` — management.
 - `fire_due_jobs()` — thread-safe; returns jobs whose cron matches the current minute, stamps `last_fired` (fires at most once/minute), and deactivates one-shot jobs (`repeat=False`) after firing. Missed slots while the bot was down are simply skipped (cron semantics).
 - Matcher supports `*`, `*/n`, `a-b`, `a,b`; validated against bounds (59/23/31/12/7).
-- Exposed to the model as tools `schedule_reminder`, `list_reminders`, `remove_reminder`. User can also manage via `/cron` and `/cron cancel <id>`.
+- Exposed to the model as tools `schedule_reminder`, `list_reminders`, `remove_reminder`, and `schedule_batch_reminders`. User can also manage via `/cron` and `/cron cancel <id>`.
+- `add_batch(entries, lead_minutes=15)` — one-call bulk scheduler for timetables. Each entry: `{day: 0-6 (0=Sunday), time: 'HH:MM', course, room}`. Creates weekly-recurring jobs firing `lead_minutes` before each class with the course + room in the message. Exists because the model's `MAX_TOOL_ITERATIONS=10` cap would break a 25-class timetable done via individual `schedule_reminder` calls.
 
 ### `tools/__init__.py`
 - `TOOL_REGISTRY` dict: maps tool name → `{schema, func}`.
@@ -227,6 +228,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 17 | Fresh clone had no `data/` dir (gitignored) → every log/memory write failed with `Errno 2` | `config.py` now does `os.makedirs(DATA_DIR)` at import; write paths (`_append_jsonl`, `_save_lessons`, `save_histories`) defensively create it too |
 | 18 | `log_failed_command` was never called — the "learn from failed commands" feature was dead code | Wired into `run_shell`: non-zero exit + stderr, timeouts, and exceptions now auto-save an `AUTO` lesson (deduped) that is relevance-fed back into the prompt |
 | — | **Feature: cron reminders** | New `tools/cron.py` (5-field cron matcher, persisted `data/cron_jobs.json`), `schedule_reminder`/`list_reminders`/`remove_reminder` tools so the model schedules reminders autonomously, `monitor.run_cron_scheduler` background task fires due jobs as Telegram messages, `/cron` + `/cron cancel <id>` commands, `CRON_CHECK_INTERVAL` env var |
+| — | **Feature: timetable bulk scheduler** | `schedule_batch_reminders` tool + `cron.add_batch(entries, lead_minutes)` — schedules a whole weekly timetable in one tool call (day 0-6, time HH:MM, course, room) firing `lead_minutes` before each class; avoids `MAX_TOOL_ITERATIONS` cap for large timetables |
 
 ---
 
