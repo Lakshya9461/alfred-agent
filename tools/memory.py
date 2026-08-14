@@ -126,13 +126,15 @@ def remove_lesson(index: int) -> str:
     except Exception as e:
         return f"Failed to remove lesson: {e}"
 
-def log_failed_command(command: str, stderr: str) -> None:
+def log_failed_command(command: str, stderr: str, returncode: int = -1) -> None:
     """
     Stores a structured note distinct from user-taught lessons.
+    Called automatically when a shell command fails, so the model learns
+    which commands to avoid on future turns.
     """
     lessons = load_lessons()
     
-    text = f"Command failed: {command} | Error: {stderr}"
+    text = f"Command failed (exit {returncode}): {command} | Error: {stderr}"
     # Dedupe
     if any(l.get("text") == text for l in lessons):
         return

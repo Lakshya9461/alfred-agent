@@ -137,7 +137,7 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 
 ### `tools/shell_exec.py`
 - `is_dangerous(command) -> tuple[bool, str]` — returns `(True, reason)` or `(False, "")`. Checks against `DANGEROUS_PATTERNS` regex list.
-- `run_shell(command, shell, confirmed, timeout=None)` — executes via `subprocess.run` with `encoding="utf-8", errors="replace"` (avoids cp1252 `UnicodeDecodeError` crashes on Windows). **Refuses execution when `runtime_config.SHELL_ENABLED` is False (lockdown).** With `CONFIRM_ALL_COMMANDS=true` (trial mode) every command requires confirmation, not just dangerous ones. Raises `ConfirmationRequired` if unconfirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution.
+- `run_shell(command, shell, confirmed, timeout=None)` — executes via `subprocess.run` with `encoding="utf-8", errors="replace"` (avoids cp1252 `UnicodeDecodeError` crashes on Windows). **Refuses execution when `runtime_config.SHELL_ENABLED` is False (lockdown).** With `CONFIRM_ALL_COMMANDS=true` (trial mode) every command requires confirmation, not just dangerous ones. Raises `ConfirmationRequired` if unconfirmed. Truncates stdout/stderr to 4000 chars. Audit-logs every execution. **Auto-saves an `AUTO` lesson on failure** (non-zero exit + stderr, timeout, or exception) so the model learns to avoid bad commands.
 - `ConfirmationRequired` exception — caught by `agent_loop.py` to pause the generator and yield a `confirmation_required` event.
 - `log_audit` — rotates `audit_log.jsonl` once it exceeds `LOG_MAX_BYTES`.
 
@@ -152,7 +152,7 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `score_lesson(lesson, user_message)` / `get_relevant_lessons(lessons, user_message, top_n)` — keyword-overlap scoring + recency bonus; used by `agent_loop` to feed only the top `MAX_LESSONS_IN_PROMPT` relevant lessons instead of all of them.
 - `log_conversation(entry)` — append-only JSONL write to `data/conversations.jsonl`, rotated via `LOG_MAX_BYTES`, serialized via `_append_jsonl`.
 - `_append_jsonl(filepath, entry, max_bytes)` — shared, thread-safe append + rotation helper (also used by `shell_exec.log_audit`). Required because Windows append mode is not atomic across threads.
-- `log_failed_command(command, stderr)` — saves auto-categorized lesson on shell failure (source="auto").
+- `log_failed_command(command, stderr, returncode)` — saves auto-categorized lesson on shell failure (source="auto"). Called from `run_shell` when a command fails (non-zero exit with stderr, timeout, or exception), so the model learns from its own mistakes.
 
 ---
 
@@ -212,6 +212,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 15 | `/shell ollama pull ...` died at the 30s default timeout | Added optional `--timeout <secs>` prefix to `/shell` (e.g. `/shell --timeout 600 ollama pull deepseek-r1:14b`) |
 | 16 | Concurrent JSONL appends lost lines on Windows (~20% dropped under load) | Windows `open(..., "a")` is not thread-atomic; serialized all JSONL writes through a shared `threading.Lock` (`_append_jsonl` in `tools/memory.py`) |
 | 17 | Fresh clone had no `data/` dir (gitignored) → every log/memory write failed with `Errno 2` | `config.py` now does `os.makedirs(DATA_DIR)` at import; write paths (`_append_jsonl`, `_save_lessons`, `save_histories`) defensively create it too |
+| 18 | `log_failed_command` was never called — the "learn from failed commands" feature was dead code | Wired into `run_shell`: non-zero exit + stderr, timeouts, and exceptions now auto-save an `AUTO` lesson (deduped) that is relevance-fed back into the prompt |
 
 ---
 

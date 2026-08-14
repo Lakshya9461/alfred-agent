@@ -5,7 +5,7 @@ import re
 from datetime import datetime, UTC
 from typing import Literal
 from config import PROJECT_ROOT, SHELL_WORKING_DIR, SHELL_TIMEOUT_SECONDS, CONFIRM_ALL_COMMANDS, LOG_MAX_BYTES
-from .memory import _append_jsonl
+from .memory import _append_jsonl, log_failed_command
 import runtime_config
 
 class ConfirmationRequired(Exception):
@@ -95,10 +95,14 @@ def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", 
         }
         
         log_audit(command, shell, dangerous, f"executed_exit_{process.returncode}")
+        # Learn from failures: non-zero exit with an error message becomes an AUTO lesson
+        if process.returncode != 0 and stderr.strip():
+            log_failed_command(command, stderr, process.returncode)
         return result
         
     except subprocess.TimeoutExpired:
         log_audit(command, shell, dangerous, "timeout")
+        log_failed_command(command, "Command timed out.", -1)
         return {
             "stdout": "",
             "stderr": "Command timed out.",
@@ -107,6 +111,7 @@ def run_shell(command: str, shell: Literal["powershell", "wsl"] = "powershell", 
         }
     except Exception as e:
         log_audit(command, shell, dangerous, f"error: {str(e)}")
+        log_failed_command(command, str(e), -1)
         return {
             "stdout": "",
             "stderr": str(e),
