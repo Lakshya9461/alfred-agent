@@ -13,6 +13,7 @@ It uses a local [Ollama](https://ollama.com/) instance as its LLM backend, and c
 - Search the web via DuckDuckGo (free) or Tavily (API key optional).
 - Persist learned lessons to disk and self-review its own conversation log.
 - Switch active Ollama models at runtime, with auto-detected context windows.
+- Schedule one-time or recurring reminders (cron) via Telegram, autonomously through the model or via `/cron`.
 
 **Entry point:** `main.py` → `telegram_bot.main()` → `app.run_polling()`
 
@@ -263,6 +264,8 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 - **Single-user design** — history is per-chat but the bot is designed for one trusted user. Multi-user scenarios are not tested.
 - **Model context detection** — relies on `model_info` keys or `parameters` string. If Ollama changes its API format, detection may fall back to 4096.
 - **Kill switch is Telegram-only** — `/lockdown` persists to disk but still requires the bot to be reachable to take effect.
+- **Reminders only fire while the bot is running** — `run_cron_scheduler` lives in-process, so a reminder missed while the bot is down is skipped (not back-filled). True always-on cron (Windows Task Scheduler / `schtasks`) would be a future enhancement.
+- **DOW `7` not supported** — cron matcher normalizes Sunday to `0`; `7` in the day-of-week field validates but never matches (use `0`).
 
 ---
 
