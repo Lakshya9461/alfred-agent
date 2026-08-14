@@ -28,6 +28,7 @@ alfred-agent/
 ├── agent_loop.py            # Core Ollama tool-calling async generator loop
 ├── telegram_bot.py          # All Telegram handlers, commands, callbacks, wiring
 ├── self_review.py           # Background asyncio task: periodic conversation self-review
+├── monitor.py               # Background tasks: new-model watcher + auto git update check/pull
 ├── ollama_utils.py          # Async helpers: list models, detect context window
 ├── tools/
 │   ├── __init__.py          # Tool registry + execute_tool dispatcher
@@ -98,9 +99,9 @@ Central file. Key globals:
 
 **`prune_history`:** Context-aware. Keeps at most `0.6 * CURRENT_CONTEXT_LENGTH / 150` messages (~16-32 depending on model). Adapts automatically when you switch models via `/model`.
 
-**`post_init`:** Called by `python-telegram-bot` after bot init. Starts self-review background task + detects startup model context window + registers command menu with Telegram.
+**`post_init`:** Called by `python-telegram-bot` after bot init. Starts the self-review background task, the model watcher, and the git update-check task; detects startup model context window; registers command menu with Telegram.
 
-**`post_shutdown`:** Cancels the self-review task gracefully (prevents "Task destroyed while pending" errors on Ctrl+C).
+**`post_shutdown`:** Cancels all three background tasks gracefully (prevents "Task destroyed while pending" errors on Ctrl+C).
 
 **`error_handler`:** Global handler registered with `app.add_error_handler()` — logs all unhandled exceptions from any handler to the logger instead of crashing silently.
 
@@ -113,6 +114,11 @@ Central file. Key globals:
 ### `ollama_utils.py`
 - `get_available_models()` — GET `/api/tags`, returns list of model name strings.
 - `get_model_context_length(model_name)` — POST `/api/show`, searches `model_info` dict for `*context_length*` keys, then falls back to `parameters` string for `num_ctx`, then defaults to 4096.
+
+### `monitor.py`
+Background tasks started in `post_init` (all cancelled in `post_shutdown`):
+- `monitor_models(bot)` — every `MODEL_CHECK_INTERVAL` seconds, fetches the Ollama model list. The first successful fetch sets a baseline; any model that appears later triggers a Telegram notification to all `ALLOWED_USER_IDS`. No spam on startup/Ollama downtime because baseline only sets on a successful fetch.
+- `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed.
 
 ### `tools/__init__.py`
 - `TOOL_REGISTRY` dict: maps tool name → `{schema, func}`.
@@ -203,6 +209,9 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `SHELL_WORKING_DIR` | — | project root | CWD for shell commands |
 | `SHELL_TIMEOUT_SECONDS` | — | `30` | Shell command timeout |
 | `MAX_LESSONS` | — | `50` | Max lessons to retain |
+| `MODEL_CHECK_INTERVAL` | — | `60` | Seconds between checks for newly installed models |
+| `GIT_UPDATE_CHECK_INTERVAL` | — | `300` | Seconds between git update checks |
+| `AUTO_PULL` | — | `true` | Auto `git pull --ff-only` when behind, or only notify |
 
 ---
 

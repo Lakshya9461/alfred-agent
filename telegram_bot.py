@@ -20,6 +20,7 @@ from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS
 from agent_loop import run_agent_turn
 from tools.memory import load_lessons, remove_lesson
 import self_review
+import monitor
 import runtime_config
 import ollama_utils
 
@@ -433,6 +434,12 @@ async def post_init(app: Application):
     """Callback triggered after bot is initialized but before polling starts."""
     task = asyncio.create_task(self_review.run_self_review_cycle(app.bot))
     app.bot_data["self_review_task"] = task
+
+    models_task = asyncio.create_task(monitor.monitor_models(app.bot))
+    app.bot_data["models_task"] = models_task
+
+    update_task = asyncio.create_task(monitor.check_for_updates(app.bot))
+    app.bot_data["update_task"] = update_task
     
     # Register the command menu so it appears in the Telegram UI
     await app.bot.set_my_commands([
@@ -456,9 +463,10 @@ async def post_init(app: Application):
 
 async def post_shutdown(app: Application):
     """Callback triggered during application shutdown."""
-    task = app.bot_data.get("self_review_task")
-    if task:
-        task.cancel()
+    for key in ("self_review_task", "models_task", "update_task"):
+        task = app.bot_data.get(key)
+        if task:
+            task.cancel()
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Global error handler — logs exceptions so they don't silently vanish."""

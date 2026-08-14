@@ -21,3 +21,8 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 SHELL_WORKING_DIR = os.getenv("SHELL_WORKING_DIR") or PROJECT_ROOT
 SHELL_TIMEOUT_SECONDS = int(os.getenv("SHELL_TIMEOUT_SECONDS", "30"))
 MAX_LESSONS = int(os.getenv("MAX_LESSONS", "50"))
+
+# Background monitoring
+MODEL_CHECK_INTERVAL = int(os.getenv("MODEL_CHECK_INTERVAL", "60"))
+GIT_UPDATE_CHECK_INTERVAL = int(os.getenv("GIT_UPDATE_CHECK_INTERVAL", "300"))
+AUTO_PULL = os.getenv("AUTO_PULL", "true").lower() in ("1", "true", "yes", "on")
