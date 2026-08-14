@@ -211,6 +211,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 14 | `await future` on shell confirmation waited forever — a turn hung indefinitely if the user never clicked ✅/❌ | `asyncio.wait_for(future, CONFIRMATION_TIMEOUT_SECONDS)` auto-cancels the command (default 120s) |
 | 15 | `/shell ollama pull ...` died at the 30s default timeout | Added optional `--timeout <secs>` prefix to `/shell` (e.g. `/shell --timeout 600 ollama pull deepseek-r1:14b`) |
 | 16 | Concurrent JSONL appends lost lines on Windows (~20% dropped under load) | Windows `open(..., "a")` is not thread-atomic; serialized all JSONL writes through a shared `threading.Lock` (`_append_jsonl` in `tools/memory.py`) |
+| 17 | Fresh clone had no `data/` dir (gitignored) → every log/memory write failed with `Errno 2` | `config.py` now does `os.makedirs(DATA_DIR)` at import; write paths (`_append_jsonl`, `_save_lessons`, `save_histories`) defensively create it too |
 
 ---
 

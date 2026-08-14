@@ -39,6 +39,7 @@ HISTORY_FILE = os.path.join(PROJECT_ROOT, "data", "chat_histories.json")
 def save_histories():
     """Persist chat histories to disk so they survive restarts."""
     try:
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(CHAT_HISTORIES, f, ensure_ascii=False)
     except Exception as e:

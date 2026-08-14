@@ -26,6 +26,7 @@ def _rotate_if_large(filepath: str, max_bytes: int):
 def _append_jsonl(filepath: str, entry: dict, max_bytes: int):
     """Thread-safe append of a JSON line, rotating the file first if oversized."""
     with _LOG_LOCK:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         _rotate_if_large(filepath, max_bytes)
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -54,6 +55,7 @@ def load_lessons() -> list[dict]:
 
 def _save_lessons(lessons: list[dict]):
     lessons_path = os.path.join(PROJECT_ROOT, "data", "lessons.json")
+    os.makedirs(os.path.dirname(lessons_path), exist_ok=True)
     with open(lessons_path, 'w', encoding='utf-8') as f:
         json.dump(lessons, f, indent=2)
 

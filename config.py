@@ -5,6 +5,11 @@ load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# data/ is gitignored, so a fresh clone won't have it — create it now or every
+# log/memory write fails with "No such file or directory" on first run.
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 # Parse comma-separated list into a set of ints, if possible
 _allowed_ids = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
