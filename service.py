@@ -203,7 +203,11 @@ if __name__ == "__main__":
             and any(a.startswith("-") for a in sys.argv[2:])
         ):
             sys.argv = [sys.argv[0]] + sys.argv[2:] + [first]
-    if len(sys.argv) > 1 and sys.argv[1] in ("install", "update"):
+    # After any reorder the command token sits at the end (getopt options were
+    # moved before it). Use the last arg so `install --startup delayed` and the
+    # canonical `--startup delayed install` both hit this branch.
+    cmd = sys.argv[-1] if len(sys.argv) > 1 else None
+    if cmd in ("install", "update"):
         _ensure_host_in_scripts()
         host = _scripts_host_exe()
         if os.path.exists(host):
