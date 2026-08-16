@@ -170,6 +170,71 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _journal_path() -> str:
+    return os.path.join(PROJECT_ROOT, "progress_agent.md")
+
+
+def _journal_blocks(content: str) -> list:
+    """Split the journal into its dated blocks (separated by --- lines)."""
+    import re
+
+    return [p.strip() for p in re.split(r"\n{2,}---\n{2,}", content) if p.strip()]
+
+
+def _merge_local_journal(local_content: str) -> None:
+    """Re-append journal blocks from a saved local copy that are missing from
+    the current working copy, then commit them. The journal is append-only, so
+    dedup-by-block is a safe merge."""
+    path = _journal_path()
+    if not local_content or not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            current = f.read()
+    except Exception:
+        return
+    current_blocks = set(_journal_blocks(current))
+    missing = [b for b in _journal_blocks(local_content) if b not in current_blocks]
+    if not missing:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n\n---\n\n" + "\n\n---\n\n".join(missing) + "\n")
+    except Exception as e:
+        logger.error(f"merge_local_journal: failed to append: {e}")
+        return
+    _git("add", "--", "progress_agent.md")
+    _git(
+        "-c", "user.name=Alfred",
+        "-c", "user.email=alfred@local",
+        "commit", "-m", "[auto] merge local journal into pulled copy",
+    )
+
+
+def _pull_ff_only_preserving_journal() -> subprocess.CompletedProcess:
+    """git pull --ff-only, preserving any local progress_agent.md edits.
+
+    The self-improve loop on ANY host appends + commits progress_agent.md, so a
+    host with uncommitted journal edits would otherwise block every pull with a
+    merge conflict. Save the local journal, pull, then re-append the local-only
+    blocks (deduped) and commit them."""
+    journal = _journal_path()
+    local = ""
+    dirty = False
+    if os.path.exists(journal):
+        dirty = _git("diff", "--quiet", "HEAD", "--", "progress_agent.md").returncode != 0
+        if dirty:
+            try:
+                with open(journal, encoding="utf-8") as f:
+                    local = f.read()
+            except Exception:
+                local = ""
+    res = _git("pull", "--ff-only")
+    if res.returncode == 0 and dirty and local:
+        _merge_local_journal(local)
+    return res
+
+
 def _check_and_pull() -> list[str]:
     """
     Fetch origin and pull new commits (ff-only). Runs in a worker thread.
@@ -196,7 +261,7 @@ def _check_and_pull() -> list[str]:
         )
         return messages
 
-    pull = _git("pull", "--ff-only")
+    pull = _pull_ff_only_preserving_journal()
     if pull.returncode == 0:
         new_head = _git("log", "-1", "--oneline").stdout.strip()
         messages.append(
@@ -227,7 +292,7 @@ def pull_updates() -> tuple[str, bool]:
     if head == upstream:
         return ("✅ Already up to date.", False)
 
-    pull = _git("pull", "--ff-only")
+    pull = _pull_ff_only_preserving_journal()
     if pull.returncode != 0:
         return (f"❌ *git pull failed:*\n`{pull.stderr.strip()[:500]}`", False)
 

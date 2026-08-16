@@ -30,3 +30,21 @@ If you want the one-line hardening for your Ollama tool-loop on Windows: in what
 ## [SKIP] 2026-08-16 14:09 — Recently failed shell command — investigate and improve handling
 
 The 'failed' command (Get-Process -Name DefinitelyNotARealProcessXYZ) is a deliberate canary/diagnostic call, not a production bug; the research search returned zero results; the suggested target file (tools.py / shell_tool.py) does not appear in the repository's top-level file listing, so there is no concrete, verifiable code path to patch without guessing at an unknown wrapper.
+
+
+---
+
+## [RESEARCH] 2026-08-16 14:24 — Recently failed shell command — investigate and improve handling
+
+### Search: Recently failed shell command — investigate and improve handling best practice 2026
+No results found.
+
+### Critic (qwen3.5:9b)
+Modify your system tool executor (e.g., `executor.py`) to wrap subprocess calls in try/except blocks catching `subprocess.CalledProcessError`. This prevents unhandled exceptions when querying for non-existent processes like 'DefinitelyNotARealProcessXYZ' while you verify if that specific check is valid logic.
+
+
+---
+
+## [SKIP] 2026-08-16 14:25 — Recently failed shell command — investigate and improve handling
+
+Research yielded no relevant results and the suggested implementation file (executor.py) is not listed in the provided repository overview, making safe application impossible.
