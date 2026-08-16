@@ -26,47 +26,74 @@ A Telegram bot agent powered by an Ollama backend, capable of executing shell co
    python main.py
    ```
 
-## Deployment & Security: Running as a Windows Service
+## Deployment: Running as a Windows Service (pywin32)
 
-To securely execute shell commands without exposing your host to administrator-level risks, this bot should be run as a Windows Service under a dedicated, limited local account. We use WinSW for service management.
+The bot runs as a Windows service via pywin32 (`service.py`), replacing the old
+WinSW setup. The service runs as **LocalSystem** — no per-account config and no
+password, and it keeps running after you log off. On install, the Service
+Control Manager is configured to auto-restart the service if it crashes.
 
-### 1. Create the Limited Service Account
-Open an elevated Command Prompt or PowerShell as Administrator and create a new local user:
-```powershell
-net user alfredsvc YourSecurePassword123! /add
+### Local install (once per machine)
+
+1. Install dependencies: `pip install -r requirements.txt` (adds `pywin32`).
+2. From an **elevated** shell, in the project directory:
+   ```powershell
+   .\venv\Scripts\python service.py install --startup delayed
+   .\venv\Scripts\python service.py start
+   ```
+3. Check it: `Get-Service alfred-agent`.
+
+Service-control commands (all from an elevated shell, using the venv Python):
+`service.py stop` / `restart` / `remove`.
+
+Logs: the bot's normal logs stay in `data/` (`conversations.jsonl`,
+`audit_log.jsonl`); service-level Python logging goes to
+`logs\alfred-service.log` (rotated, kept in the repo dir). The SCM does **not**
+capture stdout/stderr.
+
+### Updating other devices (`deploy.py`)
+
+`deploy.py` pushes the repo and (re)installs the service on one or more targets
+from this machine. Targets live in `deploy_config.json` (gitignored; a template
+is created on first run). Each entry is either a local path or a remote host:
+
+```json
+{
+  "dev":  { "local": true, "path": "D:\\Alfred\\alfred-agent" },
+  "prod": { "local": true, "path": "C:\\1\\alfred-agent" },
+  "pc2":  { "host": "pc2", "user": "alice", "path": "C:\\alfred-agent" }
+}
 ```
-*Ensure this user is a standard user, NOT an Administrator.*
 
-### 2. Configure Minimal Permissions
-To remain secure, `alfredsvc` should only have the bare minimum permissions required to run the bot.
-Grant `alfredsvc` the following permissions:
-- **Read & Execute**: The root project directory (e.g., `d:\Alfred\alfred-agent`).
-- **Write**: 
-  - The `data/` directory (for memory, conversations, and audit logs).
-  - The `logs/` directory (for WinSW service logs).
-  - Your designated `SHELL_WORKING_DIR` (from your `.env`), if it requires writing output.
+Deploy a target:
 
-Do not grant `alfredsvc` broader system permissions. Expand access deliberately only when a specific, legitimate workflow requires it.
+```powershell
+.\venv\Scripts\python deploy.py dev --dry-run   # preview commands only
+.\venv\Scripts\python deploy.py prod            # full deploy (UAC elevation if needed)
+```
 
-### 3. Service Configuration (WinSW)
-1. Download the latest WinSW executable (e.g., `WinSW-x64.exe`) and place it in the root of the project directory.
-2. Rename it to match the XML config name: `alfred-service.exe`.
-3. Open `alfred-service.xml` and update the `<password>` field with the password you set for `alfredsvc`.
-4. Create the logs directory if it doesn't exist: `mkdir logs`
+Per target, `deploy.py`:
 
-### 4. Install, Start, Stop, and Uninstall
-Open an elevated Administrator terminal in the project directory:
+1. **Mirrors the repo** with `robocopy /MIR`, excluding `.env`, `data/`, `venv/`,
+   `logs/`, `__pycache__`, `*.pyc`. **`.env` and `data/` are never touched** —
+   each device keeps its own token, Ollama URL, and memory.
+2. Creates the target's `venv` (if missing) and `pip install -r requirements.txt`.
+3. Reinstalls the service: `stop` → `remove` → `install --startup delayed` → `start`.
 
-- **Install the service**: `.\alfred-service.exe install`
-- **Start the service**: `.\alfred-service.exe start`
-- **Check status**: `.\alfred-service.exe status`
-- **Stop the service**: `.\alfred-service.exe stop`
-- **Uninstall**: `.\alfred-service.exe uninstall`
+Remote targets are copied to the host's admin share (`\\host\c$`) and updated
+via WinRM (`Invoke-Command`); the host must have WinRM enabled and the user must
+be an administrator there. Remote credentials can be stored in the (gitignored)
+`deploy_config.json` `password` field or entered interactively.
 
-### 5. Logs location
-- **Application Logs**: Bot interactions and memory are saved to `data/conversations.jsonl` and `data/audit_log.jsonl`.
-- **Service Logs**: Stdout and Stderr crashes from the Python process are handled by WinSW and safely rolled inside the `logs/` directory (e.g., `logs/alfred-service.out.log` and `logs/alfred-service.err.log`).
+### Updating via Telegram
 
-### 6. WSL2 Access Note
-If you plan to use the `wsl` shell option via the shell execution tool, note that invoking WSL from a non-interactive Windows service account (like `alfredsvc`) has known quirks. WSL distributions are often registered per-user. 
-*This requires testing on your specific host.* You may need to explicitly configure `alfredsvc` to have a default WSL distribution or import a rootfs for it. Verify its functionality manually via `runas /user:alfredsvc "wsl -- bash -c 'ls'"` before relying on it in the bot.
+The `/update` command in Telegram already runs `git pull --ff-only` and restarts.
+Under the pywin32 service, `monitor.restart_bot()` detects service mode and
+spawns a detached `service.py restart` (no `RESTART_COMMAND` needed in `.env`).
+
+### WSL2 note
+
+If you use the `wsl` shell option, note that invoking WSL from a non-interactive
+service account (including LocalSystem) has known quirks — WSL distributions are
+registered per-user, and SYSTEM may run as a different default user. Verify
+manually before relying on it: `psexec -s wsl -- bash -c 'whoami'`.

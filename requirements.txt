@@ -2,3 +2,4 @@ python-telegram-bot>=21
 httpx
 python-dotenv
 duckduckgo-search
+pywin32>=306

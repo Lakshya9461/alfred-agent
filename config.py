@@ -1,9 +1,11 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
-
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env from the repo root explicitly. Running as a Windows service the
+# working dir is %SystemRoot%\System32, so a bare load_dotenv() would miss it.
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 # data/ is gitignored, so a fresh clone won't have it — create it now or every
 # log/memory write fails with "No such file or directory" on first run.

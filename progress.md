@@ -31,6 +31,8 @@ alfred-agent/
 ├── self_review.py           # Background asyncio task: periodic conversation self-review
 ├── monitor.py               # Background tasks: new-model watcher, auto git update check/pull, cron reminder scheduler
 ├── ollama_utils.py          # Async helpers: list models, detect context window
+├── service.py               # pywin32 Windows service wrapper (runs as LocalSystem)
+├── deploy.py                # Push updates to other devices (robocopy + WinRM service reinstall)
 ├── tools/
 │   ├── __init__.py          # Tool registry + execute_tool dispatcher
 │   ├── web_search.py        # Tavily (if key) or DuckDuckGo search
@@ -45,12 +47,12 @@ alfred-agent/
 │   ├── chat_histories.json  # Persisted per-chat histories (survive restarts)
 │   ├── shell_lock.json      # Kill-switch state for /lockdown (survives restarts)
 │   └── cron_jobs.json       # Scheduled reminders (survive restarts)
-├── logs/                    # WinSW service stdout/stderr logs
-├── alfred-service.xml       # WinSW service config (runs as alfredsvc account)
+├── logs/                    # Service-level Python logs (alfred-service.log, rotating)
+├── deploy_config.json       # Deploy targets — NOT in git
 ├── .env                     # Secrets — NOT in git
 ├── .env.example             # Template for .env
-├── requirements.txt         # Python dependencies
-└── README.md                # Deployment instructions
+├── requirements.txt         # Python dependencies (incl. pywin32)
+└── README.md                # Deployment instructions (pywin32 service)
 ```
 
 ---
@@ -62,6 +64,7 @@ Loads all settings from `.env` at import time. Values are **static** — they do
 - `OLLAMA_API_URL`, `OLLAMA_MODEL`, `MAX_TOOL_ITERATIONS`, `SELF_REVIEW_EVERY_N_TURNS`
 - `SHELL_WORKING_DIR` uses `or PROJECT_ROOT` fallback so empty string in `.env` works correctly.
 - `TELEGRAM_ALLOWED_USER_IDS` is parsed as a comma-separated list of integers.
+- `load_dotenv()` targets `PROJECT_ROOT/.env` explicitly (not cwd) — the Windows service runs with `cwd=%SystemRoot%\System32`.
 
 ### `runtime_config.py`
 Holds values that **can change at runtime** (e.g., via `/model`).
@@ -85,6 +88,7 @@ Central file. Key globals:
 - `PENDING_CONFIRMATIONS: Dict[str, asyncio.Future]` — futures for agent-requested shell confirmations.
 - `DIRECT_SHELL_CACHE: Dict[str, Dict]` — stores `{command, timeout}` for `/shell` dangerous confirmations (avoids Telegram's 64-byte callback_data limit).
 - `MODEL_CACHE: List[str]` — populated by `/model` command for inline keyboard index lookup.
+- `_APP` / `_LOOP` — set in `post_init` (runs on the bot's event loop); `stop_bot()` schedules `app.stop_running()` on that loop via `run_coroutine_threadsafe`. Used by `service.py` for graceful shutdown from the SCM thread. **Do not move `_APP`/`_LOOP` assignment out of `post_init`** — that is the only hook that runs on the app's loop.
 
 **Commands:**
 | Command | Handler | Notes |
@@ -132,8 +136,25 @@ Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `monitor_models(bot)` — every `MODEL_CHECK_INTERVAL` seconds, fetches the Ollama model list. The first successful fetch sets a baseline; any model that appears later triggers a Telegram notification to all `ALLOWED_USER_IDS`. No spam on startup/Ollama downtime because baseline only sets on a successful fetch.
 - `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed.
 - `pull_updates() -> (message, changed)` — manual update for `/update`; fetches and ff-pulls, returns a Telegram-ready message and whether anything changed.
-- `restart_bot()` — restarts the process. If `RESTART_COMMAND` is set (service mode, e.g. `.\alfred-service.exe restart`) it is executed; otherwise the bot respawns itself (`python main.py`) in dev mode. Current process exits via `os._exit(0)`.
+- `restart_bot()` — restarts the process. Priority: `RESTART_COMMAND` if set → if `ALFRED_SERVICE_NAME` env is set (pywin32 service mode) spawn a detached `venv python service.py restart` and `os._exit(0)` → otherwise self-respawn (`python main.py`) in dev mode. So the pywin32 service needs **no** `RESTART_COMMAND` in `.env`.
 - `run_cron_scheduler(bot)` — every `CRON_CHECK_INTERVAL` seconds, calls `cron.fire_due_jobs()` in a worker thread and sends each due reminder to all `ALLOWED_USER_IDS` via Telegram.
+
+### `service.py`
+pywin32 `ServiceFramework` wrapper replacing WinSW (`alfred-service.xml`, now deleted). Runs the bot as **LocalSystem** (no password, survives logoff).
+- `SvcDoRun` — chdir to repo root, sets `ALFRED_SERVICE_NAME`, runs `telegram_bot.main()` in a daemon thread, waits on a `win32event`, then joins the thread (30s grace) so `run_polling` can exit cleanly.
+- `SvcStop` — runs on a separate SCM thread; calls `telegram_bot.stop_bot()` then signals the event.
+- `Install` classmethod additionally sets SCM failure actions (`SC_ACTION_RESTART` after 10s then 30s, then `SC_ACTION_NONE`) so a crash auto-restarts the service.
+- `setup_logging()` adds a rotating `logs/alfred-service.log` handler (SCM does not capture stdout/stderr).
+- CLI via `win32serviceutil.HandleCommandLine` (elevated): `install --startup delayed`, `start`, `stop`, `restart`, `remove`, `update`.
+- **Gotcha:** never import `telegram_bot` at module top of `service.py` — install/remove run without the bot context and must stay light.
+
+### `deploy.py`
+Push-update script: `python deploy.py <target> [--dry-run] [--no-elevate]`. Targets from gitignored `deploy_config.json` (template auto-created with `dev`/`prod` local paths). Per target:
+1. `robocopy /MIR` the repo excluding `.env`, `data/`, `venv/`, `logs/`, `__pycache__`, `*.pyc`, `deploy_config.json` — **`.env` and `data/` are never overwritten** (each device keeps its own token/Ollama URL/memory).
+2. Ensure venv + `pip install -r requirements.txt`.
+3. Reinstall the service: `stop` → `remove` → `install --startup delayed` → `start` (stop/remove failures are ignored).
+- Local targets run the steps directly; remote targets copy to `\\host\<drive>$` (admin share) and run the same steps over WinRM (`Invoke-Command`). Remote creds may live in the gitignored config `password` field or be prompted.
+- Self-elevates via UAC (`ShellExecuteW runas`) when not admin; `--no-elevate` forbids that.
 
 ### `tools/cron.py`
 - Standard 5-field cron reminders (`minute hour dom month dow`, dow 0-6 with 0=Sunday). Persisted to `data/cron_jobs.json`.
@@ -229,6 +250,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 18 | `log_failed_command` was never called — the "learn from failed commands" feature was dead code | Wired into `run_shell`: non-zero exit + stderr, timeouts, and exceptions now auto-save an `AUTO` lesson (deduped) that is relevance-fed back into the prompt |
 | — | **Feature: cron reminders** | New `tools/cron.py` (5-field cron matcher, persisted `data/cron_jobs.json`), `schedule_reminder`/`list_reminders`/`remove_reminder` tools so the model schedules reminders autonomously, `monitor.run_cron_scheduler` background task fires due jobs as Telegram messages, `/cron` + `/cron cancel <id>` commands, `CRON_CHECK_INTERVAL` env var |
 | — | **Feature: timetable bulk scheduler** | `schedule_batch_reminders` tool + `cron.add_batch(entries, lead_minutes)` — schedules a whole weekly timetable in one tool call (day 0-6, time HH:MM, course, room) firing `lead_minutes` before each class; avoids `MAX_TOOL_ITERATIONS` cap for large timetables |
+| — | **Feature: pywin32 service migration** | Replaced WinSW (`alfred-service.xml`) with `service.py` (`ServiceFramework`, runs as LocalSystem, SCM failure-restart actions, graceful `stop_bot()` via `_APP`/`_LOOP` captured in `post_init`). Added `deploy.py` to push code + reinstall the service on other devices (`deploy_config.json`, robocopy excluding `.env`/`data/`/`venv`/`logs`, local or WinRM targets). `config.py` now loads `.env` from `PROJECT_ROOT` explicitly (service cwd is `System32`); `monitor.restart_bot()` detects service mode via `ALFRED_SERVICE_NAME` and runs `python service.py restart`, so no `RESTART_COMMAND` is needed under the service |
 
 ---
 
@@ -251,7 +273,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `CRON_CHECK_INTERVAL` | — | `20` | Seconds between checks for due cron reminders |
 | `AUTO_PULL` | — | `true` | Auto `git pull --ff-only` when behind, or only notify |
 | `CONFIRMATION_TIMEOUT_SECONDS` | — | `120` | How long to wait for a user to confirm a dangerous command before auto-cancelling |
-| `RESTART_COMMAND` | — | `` | Command to restart the bot (service mode, e.g. `.\alfred-service.exe restart`). Empty = self-respawn (dev mode) |
+| `RESTART_COMMAND` | — | `` | Custom restart command. **Unneeded under the pywin32 service** — `monitor.restart_bot()` detects `ALFRED_SERVICE_NAME` and runs `venv python service.py restart` automatically. Set only to override with a custom supervisor. Empty = self-respawn (dev mode) |
 | `LOG_MAX_BYTES` | — | `10485760` | Rotate `conversations.jsonl` / `audit_log.jsonl` past this size (bytes) |
 | `MAX_LESSONS_IN_PROMPT` | — | `20` | Max relevance-scored lessons fed into the system prompt |
 | `CONFIRM_ALL_COMMANDS` | — | `false` | Trial mode: require confirmation for EVERY shell command |
@@ -262,7 +284,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 
 ## Known Limitations & Future Work
 
-- **WSL2 from service account** — Invoking WSL from a non-interactive service account (`alfredsvc`) is unreliable. Needs manual testing. See README for details.
+- **WSL2 from service account** — Invoking WSL from a non-interactive service account (the service now runs as LocalSystem) is unreliable: WSL distros are registered per-user and SYSTEM may resolve to a different default user. Needs manual testing. See README for details.
 - **Lesson relevance is keyword-based, not semantic** — `get_relevant_lessons` uses token overlap + recency. Semantic/vector search would be more accurate but costs more.
 - **Log rotation is size-based, not time-based** — `conversations.jsonl.1` / `audit_log.jsonl.1` are kept as single rotated backups, not a dated archive.
 - **Single-user design** — history is per-chat but the bot is designed for one trusted user. Multi-user scenarios are not tested.
@@ -279,11 +301,17 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 # Development
 .\venv\Scripts\python main.py
 
-# As a Windows Service (see README.md for full steps)
-.\alfred-service.exe install
-.\alfred-service.exe start
+# As a Windows Service (pywin32 — elevated shell; see README.md for full steps)
+.\venv\Scripts\python service.py install --startup delayed
+.\venv\Scripts\python service.py start
+.\venv\Scripts\python service.py restart   # or stop / remove
+Get-Service alfred-agent
+
+# Push an update to another device (see deploy.py / README)
+.\venv\Scripts\python deploy.py prod --dry-run
+.\venv\Scripts\python deploy.py prod
 ```
 
 ---
 
-*Last updated: 2026-08-14*
+*Last updated: 2026-08-16*

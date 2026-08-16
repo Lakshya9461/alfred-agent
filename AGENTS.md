@@ -4,11 +4,12 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 
 ## Commands
 
-- Run (dev): `.\venv\Scripts\python main.py` (venv is repo-local). Service mode uses WinSW (`alfred-service.xml`) under the `alfredsvc` account.
+- Run (dev): `.\venv\Scripts\python main.py` (venv is repo-local). Service mode = pywin32 (`service.py`, runs as **LocalSystem**): `.\venv\Scripts\python service.py install --startup delayed` / `start` / `stop` / `restart` / `remove` — **must be elevated**. `deploy.py <target>` pushes code + reinstalls the service on other devices (targets in gitignored `deploy_config.json`).
 - **No test/lint/typecheck tooling exists.** Don't add any. Verify with:
   - Syntax: `.\venv\Scripts\python -m py_compile <files>`
   - Logic: throwaway scripts via `.\venv\Scripts\python -c "..."` importing the module directly (see "Verification quirks").
-- Git: single `master` branch, remote `origin` (GitHub). Workflow convention: after any change, `git add -A && git commit` **and `git push origin master`**. `data/`, `.env`, `venv/` are gitignored — never commit them.
+  - `tools/shell_exec.py` ships a `__main__` regression self-test for `is_dangerous`: `.\venv\Scripts\python -m tools.shell_exec`.
+- Git: single `master` branch, remote `origin` (GitHub). Workflow convention: after any change, `git add -A && git commit` **and `git push origin master`**. `data/`, `.env`, `venv/`, `logs/`, `deploy_config.json` are gitignored — never commit them.
 
 ## Architecture
 
@@ -20,6 +21,8 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 - `self_review.py` — every `SELF_REVIEW_EVERY_N_TURNS` turns, sends new `conversations.jsonl` lines to Ollama and saves extracted lessons.
 - `config.py` / `runtime_config.py` — static `.env` settings vs. mutable state (`CURRENT_MODEL`, `CURRENT_CONTEXT_LENGTH`, `SHELL_ENABLED`). All Ollama requests read from `runtime_config`, not `config`.
 - `ollama_utils.py` — model list + context-window detection.
+- `service.py` — pywin32 `ServiceFramework` (LocalSystem). `SvcDoRun` runs `telegram_bot.main()` in a thread and chdirs to the repo; `SvcStop` calls `telegram_bot.stop_bot()`. `stop_bot()` needs the `_APP`/`_LOOP` globals captured in `post_init` — don't move that assignment. Install sets SCM failure-restart actions.
+- `deploy.py` — `python deploy.py <target> [--dry-run]`: robocopy the repo (excluding `.env`/`data/`/`venv`/`logs`) to each target in `deploy_config.json`, recreate venv + deps, reinstall service (stop→remove→install→start). Remote targets use WinRM + admin share; `.env` is never touched.
 
 ## Gotchas (hard-earned)
 
@@ -30,12 +33,13 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 - **Model learns from its own mistakes** two ways: `run_shell` auto-saves an `AUTO` lesson via `log_failed_command` on failure, and `self_review` extracts lessons periodically. Lessons are relevance-scored (`get_relevant_lessons`, `MAX_LESSONS_IN_PROMPT`) into the system prompt.
 - **Cron reminders fire only while the bot process runs** (in-process scheduler, `data/cron_jobs.json`). Missed slots are skipped, not back-filled. `schedule_batch_reminders` exists because 25 timetable jobs would blow past `MAX_TOOL_ITERATIONS=10` as individual calls.
 - **Kill switch:** `/lockdown` persists `data/shell_lock.json`; `run_shell` refuses while `runtime_config.SHELL_ENABLED` is False. Dangerous commands (and all commands under `CONFIRM_ALL_COMMANDS`) need user confirmation via inline button, auto-cancelled after `CONFIRMATION_TIMEOUT_SECONDS`.
+- **Service runs as LocalSystem with `cwd=%SystemRoot%\System32`.** `config.py` must load `.env` from `PROJECT_ROOT` explicitly (never a bare `load_dotenv()`). `service.py` chdirs to the repo in `SvcDoRun` as a belt-and-braces measure. Service commands must run from an elevated shell (non-admin: `install` fails with access denied; `deploy.py` self-elevates via UAC).
 
 ## Verification quirks
 
 - No unit tests. Ad-hoc verification scripts run with `sys.path.insert(0, <repo>)` then import modules directly.
 - Scripts that call `add_job`/`add_lesson`/`_append_jsonl` write into the live `data/` files. Back up the file (or the whole `data/` dir) before testing and restore after — stray test lessons/jobs pollute the running bot's memory. `config.py` creates `data/` at import, so fresh clones won't fail on first write.
-- Deployed in two places with **different `.env`**: `D:\Alfred\alfred-agent` (dev, remote Ollama `172.16.4.116`) and `C:\1\alfred-agent` (prod, `localhost:11434`). The auto-updater `git pull`s new code but **never restarts** — each deployment needs a manual restart to pick up changes, so a "fixed" bug can still appear live.
+- Deployed in multiple places with **different `.env`**: `D:\Alfred\alfred-agent` (dev, remote Ollama `172.16.4.116`) and `C:\1\alfred-agent` (prod, `localhost:11434`) plus any `deploy_config.json` targets. The auto-updater `git pull`s new code but **never restarts** — push updates with `deploy.py` (which reinstalls + restarts the service) or `/update` to actually apply changes, so a "fixed" bug can still appear live until then.
 
 ## Docs
 

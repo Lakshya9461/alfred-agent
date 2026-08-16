@@ -36,6 +36,34 @@ CHAT_HISTORIES: Dict[int, List[Dict[str, Any]]] = {}
 # Persistence file for chat histories (survives restarts)
 HISTORY_FILE = os.path.join(PROJECT_ROOT, "data", "chat_histories.json")
 
+# References used by service.py for graceful shutdown: the Application instance
+# and the event loop it runs on (captured in post_init, which runs on that loop).
+_APP = None
+_LOOP = None
+
+def stop_bot():
+    """Gracefully stop the running Application. Safe to call from another thread
+    (e.g. the Windows service control manager in service.py)."""
+    global _APP, _LOOP
+    if _APP is None or _LOOP is None or _LOOP.is_closed():
+        return
+
+    async def _shutdown():
+        try:
+            await _APP.stop_running()
+        except Exception:
+            # run_polling may have already torn down — finalize as a fallback.
+            try:
+                await _APP.shutdown()
+            except Exception:
+                pass
+
+    try:
+        asyncio.run_coroutine_threadsafe(_shutdown(), _LOOP)
+    except RuntimeError:
+        _APP = None
+        _LOOP = None
+
 def save_histories():
     """Persist chat histories to disk so they survive restarts."""
     try:
@@ -552,6 +580,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     """Callback triggered after bot is initialized but before polling starts."""
+    global _APP, _LOOP
+    _APP = app
+    _LOOP = asyncio.get_running_loop()
+
     load_histories()
     logger.info(f"Restored {sum(len(v) for v in CHAT_HISTORIES.values())} history messages from disk.")
 

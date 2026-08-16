@@ -183,7 +183,9 @@ def pull_updates() -> tuple[str, bool]:
 def restart_bot() -> None:
     """
     Restart the bot process.
-    If RESTART_COMMAND is set (service mode) it is executed; otherwise the bot
+    If RESTART_COMMAND is set (custom service command) it is executed; under the
+    pywin32 service (ALFRED_SERVICE_NAME set by service.py) a detached
+    `python service.py restart` asks the SCM to restart us; otherwise the bot
     respawns itself (dev mode). The current process then exits immediately.
     """
     from config import RESTART_COMMAND
@@ -191,8 +193,16 @@ def restart_bot() -> None:
     kwargs = {
         "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     }
+    service_name = os.environ.get("ALFRED_SERVICE_NAME", "")
     if RESTART_COMMAND:
         subprocess.Popen(RESTART_COMMAND, shell=True, **kwargs)
+    elif service_name:
+        service_py = os.path.join(PROJECT_ROOT, "service.py")
+        subprocess.Popen(
+            [sys.executable, service_py, "restart"],
+            cwd=PROJECT_ROOT,
+            **kwargs,
+        )
     else:
         subprocess.Popen([sys.executable, "main.py"], cwd=PROJECT_ROOT, **kwargs)
     os._exit(0)
