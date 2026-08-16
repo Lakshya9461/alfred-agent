@@ -5,5 +5,6 @@ duckduckgo-search
 pywin32>=306
 # Browser automation (browse_web / consult_chatgpt). After installing run:
 #   python -m playwright install chromium
-browser-use
+browser-use==0.13.7
 playwright
+openai==2.16.0

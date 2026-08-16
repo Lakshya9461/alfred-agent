@@ -4,8 +4,8 @@ fallback for plain pages.
 
 Three entry points, all sync (execute_tool runs them via asyncio.to_thread):
   - browse_web(url=None, task=None): open a URL and/or run a natural-language
-    browsing task. The browser is driven by Ollama through browser-use's
-    OpenAI-compatible ChatOpenAI client.
+    browsing task. The browser is driven by Ollama through browser-use's native
+    ChatOllama adapter.
   - consult_chatgpt(question): drive a real browser to chat.openai.com, send a
     prompt to ChatGPT and return its reply. Requires a logged-in ChatGPT session
     in the Playwright user profile (see README). Best-effort: fails gracefully.
@@ -26,7 +26,7 @@ from config import (
     OLLAMA_API_URL,
     PROJECT_ROOT,
 )
-from runtime_config import CURRENT_MODEL
+from runtime_config import CURRENT_MODEL, CURRENT_CONTEXT_LENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +38,16 @@ _llm = None
 
 
 def _get_llm():
-    """Lazy ChatOpenAI client pointed at Ollama's OpenAI-compatible endpoint."""
+    """Lazy browser-use ChatOllama adapter (drives the browser via local Ollama)."""
     global _llm
     if _llm is None:
-        from langchain_openai import ChatOpenAI
+        from browser_use.llm.ollama.chat import ChatOllama
 
-        base = OLLAMA_API_URL.rstrip("/") + "/v1"
-        _llm = ChatOpenAI(
+        _llm = ChatOllama(
             model=CURRENT_MODEL,
-            base_url=base,
-            api_key="ollama",
+            host=OLLAMA_API_URL.rstrip("/"),
             timeout=BROWSER_USE_TIMEOUT,
+            ollama_options={"num_ctx": CURRENT_CONTEXT_LENGTH},
         )
     return _llm
 
@@ -58,7 +57,7 @@ def browser_available() -> bool:
         return False
     try:
         import browser_use  # noqa: F401
-        import langchain_openai  # noqa: F401
+        from browser_use.llm.ollama.chat import ChatOllama  # noqa: F401
         return True
     except ImportError:
         return False
