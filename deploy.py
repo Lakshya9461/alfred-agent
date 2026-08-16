@@ -45,33 +45,43 @@ if (-not (Test-Path "$Dest\venv\Scripts\python.exe")) {
     python -m venv "$Dest\venv"
 }
 & "$Dest\venv\Scripts\python.exe" -m pip install -q -r "$Dest\requirements.txt"
-# pythonservice.exe needs python*.dll, vcruntime140*.dll and pywintypes*.dll
-# adjacent to it, else the service dies instantly (STATUS_DLL_NOT_FOUND 0xC0000135).
-$cfg = "$Dest\venv\pyvenv.cfg"
-if (Test-Path $cfg) {
-    $home = (Get-Content $cfg | Where-Object { $_ -match '^home' }) -split '=', 2 | Select-Object -Last 1
-    $home = $home.Trim()
-    if ($home -and (Test-Path $home)) {
-        foreach ($f in @('python*.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
-            Get-ChildItem -Path $home -Filter $f -File | ForEach-Object {
-                if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
-                    Write-Host "[venv] copying $($_.Name) (service host dependency)"
-                    Copy-Item $_.FullName "$Dest\venv\"
+# pythonservice.exe loads python*.dll, vcruntime140*.dll and pywintypes*.dll at
+# process start; copy them next to the host exe in BOTH the venv root (3.14) and
+# venv\Scripts (required on 3.13: an exe at the venv root is treated as a base
+# install and the venv site-packages -- incl. servicemanager -- is skipped).
+$destDirs = @("$Dest\venv", "$Dest\venv\Scripts")
+foreach ($td in $destDirs) {
+    if (-not (Test-Path $td)) { continue }
+    $cfg = "$Dest\venv\pyvenv.cfg"
+    if (Test-Path $cfg) {
+        $home = (Get-Content $cfg | Where-Object { $_ -match '^home' }) -split '=', 2 | Select-Object -Last 1
+        $home = $home.Trim()
+        if ($home -and (Test-Path $home)) {
+            foreach ($f in @('python*.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+                Get-ChildItem -Path $home -Filter $f -File | ForEach-Object {
+                    if (-not (Test-Path "$td\$($_.Name)")) {
+                        Write-Host "[venv] copying $($_.Name) (service host dependency)"
+                        Copy-Item $_.FullName "$td\"
+                    }
+                }
+            }
+        }
+        $pyw32 = "$Dest\venv\Lib\site-packages\pywin32_system32"
+        if (Test-Path $pyw32) {
+            foreach ($f in @('pywintypes*.dll', 'pythoncom*.dll')) {
+                Get-ChildItem -Path $pyw32 -Filter $f -File | ForEach-Object {
+                    if (-not (Test-Path "$td\$($_.Name)")) {
+                        Write-Host "[venv] copying $($_.Name) (service host dependency)"
+                        Copy-Item $_.FullName "$td\"
+                    }
                 }
             }
         }
     }
-    $pyw32 = "$Dest\venv\Lib\site-packages\pywin32_system32"
-    if (Test-Path $pyw32) {
-        foreach ($f in @('pywintypes*.dll', 'pythoncom*.dll')) {
-            Get-ChildItem -Path $pyw32 -Filter $f -File | ForEach-Object {
-                if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
-                    Write-Host "[venv] copying $($_.Name) (service host dependency)"
-                    Copy-Item $_.FullName "$Dest\venv\"
-                }
-            }
-        }
-    }
+}
+if ((Test-Path "$Dest\venv\pythonservice.exe") -and -not (Test-Path "$Dest\venv\Scripts\pythonservice.exe")) {
+    Write-Host "[venv] copying pythonservice.exe -> Scripts (service host)"
+    Copy-Item "$Dest\venv\pythonservice.exe" "$Dest\venv\Scripts\"
 }
 Write-Host "[service] stopping (ignored if absent) ..."
 & "$Dest\venv\Scripts\python.exe" "$Dest\service.py" stop 2>$null
@@ -144,37 +154,55 @@ def unc_path(target: dict) -> str:
     return f"\\\\{target['host']}\\{drive}${rest}"
 
 
+def _copy_host_deps(venv: str, target_dir: str) -> None:
+    """Copy the service host's load-time dependencies next to pythonservice.exe:
+    python*.dll + vcruntime140*.dll from the venv's base home (STATUS_DLL_NOT_FOUND
+    otherwise) and pywintypes*.dll/pythoncom*.dll from pywin32_system32."""
+    cfg = os.path.join(venv, "pyvenv.cfg")
+    home = None
+    if os.path.exists(cfg):
+        for line in open(cfg, encoding="utf-8"):
+            if line.strip().startswith("home"):
+                home = line.split("=", 1)[1].strip()
+                break
+    if home and os.path.isdir(home):
+        for pattern in ("python*.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+            for src in glob.glob(os.path.join(home, pattern)):
+                dst = os.path.join(target_dir, os.path.basename(src))
+                if not os.path.exists(dst):
+                    print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
+                    shutil.copy2(src, dst)
+    pywin32_sys = os.path.join(venv, "Lib", "site-packages", "pywin32_system32")
+    for pattern in ("pywintypes*.dll", "pythoncom*.dll"):
+        for src in glob.glob(os.path.join(pywin32_sys, pattern)):
+            dst = os.path.join(target_dir, os.path.basename(src))
+            if not os.path.exists(dst):
+                print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
+                shutil.copy2(src, dst)
+
+
 def ensure_service_host_dlls(dest: str) -> None:
     """pythonservice.exe loads python*.dll, vcruntime140*.dll AND
     pywintypes*.dll at process start. None of those are on the service's DLL
     search path, so without copies next to the host exe the service dies
-    instantly with STATUS_DLL_NOT_FOUND (0xC0000135). Copy the base
-    interpreter DLLs from the venv's home, and the pywin32 DLLs from
-    pywin32_system32, into the venv root if missing."""
+    instantly with STATUS_DLL_NOT_FOUND (0xC0000135). Copy them into the venv
+    root AND venv\\Scripts: the root copy covers Python 3.14; the Scripts copy
+    is required for 3.13, whose path resolver treats an exe at the venv root as
+    a base install and skips the venv site-packages (so 'servicemanager' can't
+    be imported)."""
     venv = os.path.join(dest, "venv")
-    cfg = os.path.join(venv, "pyvenv.cfg")
-    if not os.path.exists(cfg):
+    if not os.path.exists(os.path.join(venv, "pyvenv.cfg")):
         return
-    home = None
-    for line in open(cfg, encoding="utf-8"):
-        if line.strip().startswith("home"):
-            home = line.split("=", 1)[1].strip()
-            break
-    if not home or not os.path.isdir(home):
-        return
-    for pattern in ("python*.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
-        for src in glob.glob(os.path.join(home, pattern)):
-            dst = os.path.join(venv, os.path.basename(src))
-            if not os.path.exists(dst):
-                print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
-                shutil.copy2(src, dst)
-    pywin32_sys = os.path.join(venv, "Lib", "site-packages", "pywin32_system32")
-    for pattern in ("pywintypes*.dll", "pythoncom*.dll"):
-        for src in glob.glob(os.path.join(pywin32_sys, pattern)):
-            dst = os.path.join(venv, os.path.basename(src))
-            if not os.path.exists(dst):
-                print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
-                shutil.copy2(src, dst)
+    _copy_host_deps(venv, venv)
+    scripts = os.path.join(venv, "Scripts")
+    os.makedirs(scripts, exist_ok=True)
+    _copy_host_deps(venv, scripts)
+    src_host = os.path.join(venv, "pythonservice.exe")
+    if os.path.exists(src_host) and not os.path.exists(
+        os.path.join(scripts, "pythonservice.exe")
+    ):
+        print("[venv] copying pythonservice.exe -> Scripts (service host)")
+        shutil.copy2(src_host, os.path.join(scripts, "pythonservice.exe"))
 
 
 def deploy_local(target: dict, dry_run: bool) -> int:

@@ -14,7 +14,9 @@ On install, SCM recovery options are set so a crash restarts the service
 (10s, then 30s, then give up). Per-device settings stay in .env, which the
 deploy script never touches.
 """
+import glob
 import os
+import shutil
 import sys
 import logging
 import threading
@@ -44,6 +46,53 @@ DISPLAY_NAME = "Alfred Agent Service"
 DESCRIPTION = "Telegram bot agent powered by Ollama, running as a Windows service."
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_host_in_scripts():
+    """pythonservice.exe must run from venv\\Scripts (where python.exe lives),
+    or Python 3.13's path resolver treats an exe at the venv root as a base
+    install and never adds the venv site-packages to sys.path — so
+    'servicemanager' can't be imported and the service dies with
+    'unable to locate the service manager'. Also copy the load-time DLLs
+    (python*.dll, vcruntime140*.dll, pywintypes*.dll) next to the host exe."""
+    scripts = os.path.join(sys.prefix, "Scripts")
+    os.makedirs(scripts, exist_ok=True)
+    src_host = os.path.join(sys.prefix, "pythonservice.exe")
+    if os.path.exists(src_host) and not os.path.exists(
+        os.path.join(scripts, "pythonservice.exe")
+    ):
+        shutil.copy2(src_host, os.path.join(scripts, "pythonservice.exe"))
+
+    home = None
+    cfg = os.path.join(sys.prefix, "pyvenv.cfg")
+    if os.path.exists(cfg):
+        for line in open(cfg, encoding="utf-8"):
+            if line.strip().startswith("home"):
+                home = line.split("=", 1)[1].strip()
+                break
+    for pattern in ("python*.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+        for src in glob.glob(os.path.join(home, pattern)) if home else []:
+            dst = os.path.join(scripts, os.path.basename(src))
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+    pywin32_sys = os.path.join(
+        sys.prefix, "Lib", "site-packages", "pywin32_system32"
+    )
+    for pattern in ("pywintypes*.dll", "pythoncom*.dll"):
+        for src in glob.glob(os.path.join(pywin32_sys, pattern)):
+            dst = os.path.join(scripts, os.path.basename(src))
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+
+
+def _scripts_host_exe():
+    """Service ImagePath host: prefer the venv Scripts copy (works on all
+    supported Pythons); fall back to the venv-root host win32serviceutil
+    installs by default."""
+    host = os.path.join(sys.prefix, "Scripts", "pythonservice.exe")
+    if os.path.exists(host):
+        return host
+    return os.path.join(sys.prefix, "pythonservice.exe")
 
 
 def setup_logging():
@@ -154,4 +203,10 @@ if __name__ == "__main__":
             and any(a.startswith("-") for a in sys.argv[2:])
         ):
             sys.argv = [sys.argv[0]] + sys.argv[2:] + [first]
+    if len(sys.argv) > 1 and sys.argv[1] in ("install", "update"):
+        _ensure_host_in_scripts()
+        host = _scripts_host_exe()
+        if os.path.exists(host):
+            print(f"[service] hosting from {host}")
+            AlfredService._exe_name_ = host
     win32serviceutil.HandleCommandLine(AlfredService)
