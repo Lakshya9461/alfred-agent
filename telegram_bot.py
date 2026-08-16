@@ -683,6 +683,9 @@ async def post_init(app: Application):
     skills_task = asyncio.create_task(monitor.update_skills(app.bot))
     app.bot_data["skills_task"] = skills_task
 
+    curate_task = asyncio.create_task(monitor.skill_curation(app.bot))
+    app.bot_data["curate_task"] = curate_task
+
     improve_task = asyncio.create_task(self_improve.run_self_improve(app.bot))
     app.bot_data["improve_task"] = improve_task
     

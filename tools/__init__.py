@@ -11,7 +11,7 @@ from .shell_exec import run_shell, ConfirmationRequired
 from .memory import add_lesson
 from .cron import add_job, add_batch, list_jobs, remove_job
 from .browser import browse_web, consult_chatgpt
-from skills import read_skill
+from skills import read_skill, search_skills
 
 TOOL_REGISTRY = {
     "web_search": {
@@ -234,6 +234,31 @@ TOOL_REGISTRY = {
             }
         },
         "func": read_skill
+    },
+    "search_skills": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "search_skills",
+                "description": (
+                    "Searches the installed skills by name/description and returns "
+                    "matching skill names. Use this BEFORE read_skill when the system "
+                    "prompt's skill list doesn't obviously cover the task — the prompt "
+                    "only shows the most-used skills, but search finds any of them."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {
+                            "type": "string",
+                            "description": "Keyword or short phrase describing the task."
+                        }
+                    },
+                    "required": ["keyword"]
+                }
+            }
+        },
+        "func": search_skills
     },
     "browse_web": {
         "schema": {

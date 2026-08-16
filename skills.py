@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 SKILLS_DIR = os.path.join(PROJECT_ROOT, "data", "skills")
 CONFIG_FILE = os.path.join(PROJECT_ROOT, "data", "skills_config.json")
+USAGE_FILE = os.path.join(PROJECT_ROOT, "data", "skills_usage.json")
+ABSORBED_FILE = os.path.join(PROJECT_ROOT, "data", "skills_absorbed.json")
 
 _write_lock = threading.Lock()
 _skill_cache = None
@@ -72,10 +74,11 @@ def load_config() -> dict:
             cfg.setdefault("enabled", [])
             cfg.setdefault("ignored", [])
             cfg.setdefault("seen", [])
+            cfg.setdefault("disabled_skills", [])
             return cfg
     except Exception as e:
         logger.warning(f"skills: failed to read {CONFIG_FILE}: {e}")
-    return {"enabled": list(SKILL_REPOS), "ignored": [], "seen": []}
+    return {"enabled": list(SKILL_REPOS), "ignored": [], "seen": [], "disabled_skills": []}
 
 
 def save_config(cfg: dict) -> None:
@@ -155,6 +158,174 @@ def invalidate_cache() -> None:
     _skill_cache = None
 
 
+# ── Usage tracking, pruning, absorbing (self-curation) ───────────────────────
+
+def _load_usage() -> dict:
+    try:
+        if os.path.exists(USAGE_FILE):
+            with open(USAGE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"skills: failed to read {USAGE_FILE}: {e}")
+    return {}
+
+
+def _save_usage(usage: dict) -> None:
+    with _write_lock:
+        try:
+            with open(USAGE_FILE, "w", encoding="utf-8") as f:
+                json.dump(usage, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"skills: failed to write {USAGE_FILE}: {e}")
+
+
+def record_usage(name: str) -> None:
+    """Mark a skill as used (called when its full instructions are loaded)."""
+    import datetime
+
+    usage = _load_usage()
+    entry = usage.get(name, {"uses": 0, "last_used": ""})
+    entry["uses"] = entry.get("uses", 0) + 1
+    entry["last_used"] = datetime.date.today().isoformat()
+    usage[name] = entry
+    _save_usage(usage)
+
+
+def _disabled() -> set:
+    return set(load_config().get("disabled_skills", []))
+
+
+def _set_disabled(name: str, disabled: bool) -> None:
+    cfg = load_config()
+    names = cfg.setdefault("disabled_skills", [])
+    if disabled and name not in names:
+        names.append(name)
+    elif not disabled and name in names:
+        names.remove(name)
+    save_config(cfg)
+    invalidate_cache()
+
+
+def search_skills(query: str, limit: int = 20) -> str:
+    """Find installed skills whose name or description matches a task. Returns
+    a short list of matching skill names (the model then calls read_skill)."""
+    q = query.strip().lower()
+    if not q:
+        return "Search requires a keyword."
+    skills = load_skills(enabled_only=True)
+    tokens = [t for t in q.split() if t]
+    hits = []
+    for s in skills:
+        haystack = f"{s['name']} {s['description']}".lower()
+        if all(t in haystack for t in tokens):
+            hits.append(s)
+    if not hits:
+        return f"No installed skills match '{query}'. Try a different keyword."
+    hits.sort(key=lambda x: (x["name"], x["repo"]))
+    out = []
+    for s in hits[:limit]:
+        out.append(f"- `{s['name']}` ({s['repo']}) — {s['description'][:120]}")
+    if len(hits) > limit:
+        out.append(f"… and {len(hits) - limit} more")
+    return "\n".join(out) or f"No installed skills match '{query}'."
+
+
+def prune_unused_skills(days: int = None) -> list:
+    """Disable skills not used within `days` (0/None = use SKILLS_PRUNE_AFTER_DAYS).
+    Only skills that HAVE a usage record and went stale are pruned — a skill that
+    was never used is left alone (it's simply outranked in the usage-ordered
+    index). Returns the pruned skill names."""
+    from config import SKILLS_PRUNE_AFTER_DAYS
+
+    import datetime
+
+    if days is None:
+        days = SKILLS_PRUNE_AFTER_DAYS
+    if days <= 0:
+        return []
+    usage = _load_usage()
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=days)
+    disabled = _disabled()
+    pruned = []
+    for s in load_skills(enabled_only=False):
+        if s["name"] in disabled:
+            continue
+        entry = usage.get(s["name"])
+        if not entry:
+            continue
+        try:
+            last_date = (
+                datetime.date.fromisoformat(entry.get("last_used", ""))
+                if entry.get("last_used")
+                else None
+            )
+        except ValueError:
+            last_date = None
+        if last_date is not None and last_date < cutoff:
+            pruned.append(s["name"])
+            disabled.add(s["name"])
+    if pruned:
+        cfg = load_config()
+        cfg["disabled_skills"] = list(disabled)
+        save_config(cfg)
+        invalidate_cache()
+    return pruned
+
+
+def absorb_used_skills(min_uses: int = None) -> list:
+    """Copy skills used `min_uses`+ times into Alfred's own knowledge
+    (data/skills_absorbed.json) and add a summary lesson. Returns absorbed names."""
+    from config import SKILLS_ABSORB_MIN_USES
+
+    if min_uses is None:
+        min_uses = SKILLS_ABSORB_MIN_USES
+    if min_uses <= 0:
+        return []
+    usage = _load_usage()
+    absorbed = {}
+    try:
+        if os.path.exists(ABSORBED_FILE):
+            with open(ABSORBED_FILE, encoding="utf-8") as f:
+                absorbed = json.load(f)
+    except Exception as e:
+        logger.warning(f"skills: failed to read {ABSORBED_FILE}: {e}")
+
+    absorbed_now = []
+    for s in load_skills(enabled_only=False):
+        entry = usage.get(s["name"], {})
+        if entry.get("uses", 0) < min_uses:
+            continue
+        if s["name"] in absorbed:
+            continue
+        absorbed[s["name"]] = {
+            "repo": s["repo"],
+            "name": s["name"],
+            "description": s["description"],
+            "absorbed_date": __import__("datetime").date.today().isoformat(),
+            "content": s["content"],
+        }
+        absorbed_now.append(s["name"])
+        try:
+            from tools.memory import add_lesson
+
+            add_lesson(
+                f"Skill '{s['name']}' ({s['repo']}): {s['description']}. "
+                f"Full procedure is stored in data/skills_absorbed.json.",
+                source="skill",
+            )
+        except Exception as e:
+            logger.warning(f"skills: failed to add absorb lesson for {s['name']}: {e}")
+    if absorbed_now:
+        with _write_lock:
+            try:
+                with open(ABSORBED_FILE, "w", encoding="utf-8") as f:
+                    json.dump(absorbed, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"skills: failed to write {ABSORBED_FILE}: {e}")
+    return absorbed_now
+
+
 def _parse_frontmatter(content: str) -> dict:
     meta = {}
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
@@ -222,13 +393,17 @@ def _scan() -> list:
     return list(by_key.values())
 
 
-def load_skills(force: bool = False) -> list:
+def load_skills(force: bool = False, enabled_only: bool = True) -> list:
     """Return the skill index (cached until a repo refresh invalidates it).
     Pass force=True to rescan from disk — use in interactive commands so a
-    stale empty cache from before the repos were cloned is never shown."""
+    stale empty cache from before the repos were cloned is never shown.
+    enabled_only=False includes auto-pruned (disabled) skills too."""
     global _skill_cache
     if _skill_cache is None or force:
         _skill_cache = _scan()
+    if enabled_only:
+        disabled = _disabled()
+        return [s for s in _skill_cache if s["name"] not in disabled]
     return _skill_cache
 
 
@@ -237,11 +412,20 @@ def format_skill_index(skills: list, limit: int = 60, max_chars: int = 3500) -> 
 
     Caps both the number of lines and the total size so the result always fits
     in a Telegram message (4096-char limit) — with hundreds of skills the full
-    list would exceed it and the send would fail silently."""
+    list would exceed it and the send would fail silently. Ordering is by
+    usage (most-used first) so the visible slice is the most relevant set."""
     if not skills:
         return "(no skills installed yet)"
+    usage = _load_usage()
     lines = []
-    for s in sorted(skills, key=lambda x: (x["repo"], x["name"])):
+    for s in sorted(
+        skills,
+        key=lambda x: (
+            -usage.get(x["name"], {}).get("uses", 0),
+            x["repo"],
+            x["name"],
+        ),
+    ):
         lines.append(f"- `{s['name']}` ({s['repo']}) — {s['description']}")
     out, used = [], 0
     for ln in lines:
@@ -255,18 +439,33 @@ def format_skill_index(skills: list, limit: int = 60, max_chars: int = 3500) -> 
 
 
 def read_skill(name: str) -> str:
-    """Return the full SKILL.md content for a skill, or a helpful message."""
-    skills = load_skills()
+    """Return the full SKILL.md content for a skill, or a helpful message.
+    Loading a skill records usage (drives prune/absorb); loading a skill that
+    was auto-pruned for inactivity re-enables it."""
+    skills = load_skills(enabled_only=False)
     if not skills:
         return "No skills are installed yet."
+    found = None
     for s in skills:
         if s["name"].lower() == name.strip().lower():
-            return s["content"]
-    for s in skills:
-        if name.strip().lower() in s["name"].lower():
-            return s["content"]
-    available = ", ".join(sorted(s["name"] for s in skills)) or "none"
-    return f"Skill '{name}' not found. Installed skills: {available}"
+            found = s
+            break
+    if found is None:
+        for s in skills:
+            if name.strip().lower() in s["name"].lower():
+                found = s
+                break
+    if found is None:
+        available = ", ".join(sorted(s["name"] for s in skills)) or "none"
+        return f"Skill '{name}' not found. Installed skills: {available}"
+    record_usage(found["name"])
+    if found["name"] in _disabled():
+        _set_disabled(found["name"], disabled=False)
+        return (
+            f"Skill '{found['name']}' was auto-pruned for inactivity; re-enabled.\n\n"
+            + found["content"]
+        )
+    return found["content"]
 
 
 SEARCH_QUERIES = [

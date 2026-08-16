@@ -17,6 +17,7 @@ from config import (
     AUTO_PULL,
     CRON_CHECK_INTERVAL,
     SKILL_UPDATE_INTERVAL,
+    SKILLS_CURATE_INTERVAL,
 )
 import ollama_utils
 from tools import cron as cron_tools
@@ -127,6 +128,55 @@ async def update_skills(bot):
             await asyncio.to_thread(skills.mark_seen, cand["full_name"])
 
         await asyncio.sleep(SKILL_UPDATE_INTERVAL)
+
+
+async def skill_curation(bot):
+    """
+    Background self-curation of the skill library:
+    - prune_unused_skills: disable skills not used in N days (they no longer
+      appear in the index, but read_skill re-enables one on demand).
+    - absorb_used_skills: copy skills used 2+ times into Alfred's own knowledge
+      (data/skills_absorbed.json) plus a summary lesson, so the procedure
+      survives even if the skill is pruned or its repo is removed.
+    Notifications are plain text (skill names/reasons contain Markdown-unsafe
+    characters).
+    """
+    await asyncio.sleep(60)
+    while True:
+        try:
+            pruned = await asyncio.to_thread(skills.prune_unused_skills)
+            if pruned:
+                msg = (
+                    "🧹 Auto-pruned " + ", ".join(sorted(pruned))
+                    + " — skills unused for a while. They stay out of the index, "
+                    "but I still remember them (re-enabled automatically if needed)."
+                )
+                for user_id in TELEGRAM_ALLOWED_USER_IDS:
+                    try:
+                        await bot.send_message(chat_id=user_id, text=msg)
+                    except Exception as e:
+                        logger.error(f"skill_curation: prune notify failed: {e}")
+        except Exception as e:
+            logger.error(f"skill_curation: prune failed: {e}")
+
+        try:
+            absorbed = await asyncio.to_thread(skills.absorb_used_skills)
+            if absorbed:
+                msg = (
+                    "🧠 Absorbed " + ", ".join(sorted(absorbed))
+                    + " — copied into my own knowledge (data/skills_absorbed.json) "
+                    "with a summary lesson, so I keep these procedures even if "
+                    "the skill is pruned."
+                )
+                for user_id in TELEGRAM_ALLOWED_USER_IDS:
+                    try:
+                        await bot.send_message(chat_id=user_id, text=msg)
+                    except Exception as e:
+                        logger.error(f"skill_curation: absorb notify failed: {e}")
+        except Exception as e:
+            logger.error(f"skill_curation: absorb failed: {e}")
+
+        await asyncio.sleep(SKILLS_CURATE_INTERVAL)
 
 
 async def check_for_updates(bot):

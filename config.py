@@ -84,6 +84,16 @@ SKILL_REPOS = [
 # Seconds between background skill-repo refresh + GitHub discovery passes
 SKILL_UPDATE_INTERVAL = int(os.getenv("SKILL_UPDATE_INTERVAL", "21600"))
 
+# ── Skill self-curation (skills.py prune/absorb) ─────────────────────────────
+# A skill is auto-disabled (hidden from the index) when it hasn't been used for
+# this many days. 0 = never prune.
+SKILLS_PRUNE_AFTER_DAYS = int(os.getenv("SKILLS_PRUNE_AFTER_DAYS", "14"))
+# A skill is "absorbed" (copied into Alfred's own knowledge + a lesson) after
+# being used this many times. 0 = never absorb.
+SKILLS_ABSORB_MIN_USES = int(os.getenv("SKILLS_ABSORB_MIN_USES", "2"))
+# Seconds between skill-curation passes (prune + absorb).
+SKILLS_CURATE_INTERVAL = int(os.getenv("SKILLS_CURATE_INTERVAL", "21600"))
+
 # ── Self-improvement loop (self_improve.py) ─────────────────────────────────
 # Seconds between autonomous research passes. 0 = disabled.
 SELF_IMPROVE_INTERVAL = int(os.getenv("SELF_IMPROVE_INTERVAL", "1800"))
