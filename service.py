@@ -29,6 +29,14 @@ except ImportError:
     win32service = None
     win32serviceutil = None
 
+if win32serviceutil is None:
+    sys.stderr.write(
+        "pywin32 is not installed in this venv.\n"
+        "Install dependencies first, then retry:\n"
+        "    .\\venv\\Scripts\\python -m pip install -r requirements.txt\n"
+    )
+    sys.exit(1)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 SERVICE_NAME = "alfred-agent"
@@ -134,10 +142,16 @@ class AlfredService(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
-    if win32serviceutil is None:
-        print(
-            "pywin32 is not installed. Run: "
-            ".\\venv\\Scripts\\python -m pip install -r requirements.txt"
-        )
-        sys.exit(1)
+    # pywin32's getopt requires options to precede the command token
+    # (`service.py --startup delayed install`). People naturally type
+    # `service.py install --startup delayed`, so reorder the command to the end
+    # when everything after it is an option.
+    if len(sys.argv) > 2:
+        first = sys.argv[1]
+        if (
+            not first.startswith("-")
+            and first in ("install", "update", "remove", "start", "stop", "restart", "debug")
+            and any(a.startswith("-") for a in sys.argv[2:])
+        ):
+            sys.argv = [sys.argv[0]] + sys.argv[2:] + [first]
     win32serviceutil.HandleCommandLine(AlfredService)
