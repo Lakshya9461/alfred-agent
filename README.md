@@ -36,15 +36,26 @@ Control Manager is configured to auto-restart the service if it crashes.
 ### Local install (once per machine)
 
 1. Install dependencies: `pip install -r requirements.txt` (adds `pywin32`).
-2. From an **elevated** shell, in the project directory:
+2. Open an **Administrator** PowerShell (right-click → "Run as administrator",
+   *not* just any terminal — see below), cd to the project directory, then:
    ```powershell
    .\venv\Scripts\python service.py install --startup delayed
    .\venv\Scripts\python service.py start
    ```
 3. Check it: `Get-Service alfred-agent`.
 
-Service-control commands (all from an elevated shell, using the venv Python):
-`service.py stop` / `restart` / `remove`.
+Service-control commands (`stop` / `restart` / `remove`) also need an
+Administrator shell.
+
+> **"Error installing service: Access is denied. (5)"** means the shell is not
+> elevated. pywin32's install must (a) register the service in the Service
+> Control Manager and (b) copy `pythonservice.exe` into the venv plus a
+> `pywintypes*.dll` into the Python base dir — the DLL copy is the part that
+> fails from a non-admin shell. A non-elevated attempt is harmless; just retry
+> from an elevated shell. To confirm elevation:
+> ```powershell
+> ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+> ```
 
 Logs: the bot's normal logs stay in `data/` (`conversations.jsonl`,
 `audit_log.jsonl`); service-level Python logging goes to
