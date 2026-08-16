@@ -56,6 +56,18 @@ Administrator shell.
 > ```powershell
 > ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 > ```
+>
+> **Still "Access is denied" from an elevated shell?** Your Python came from the
+> Microsoft Store: pywin32 copies `pywintypes*.dll` next to the base `python*.dll`
+> inside `C:\Program Files\WindowsApps\...`, a directory protected even from
+> Administrators. Fixes:
+> - **Best:** install the same Python version from python.org, delete the venv,
+>   recreate it (`python -m venv venv`), reinstall deps, retry install.
+> - **Quick:** grant write on the Store package folder and retry:
+>   ```powershell
+>   icacls "C:\Program Files\WindowsApps\<store python package>" /grant Administrators:F /T
+>   ```
+>   (may be reset by Store updates; prefer the python.org install)
 
 Logs: the bot's normal logs stay in `data/` (`conversations.jsonl`,
 `audit_log.jsonl`); service-level Python logging goes to

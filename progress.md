@@ -287,6 +287,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 
 - **WSL2 from service account** — Invoking WSL from a non-interactive service account (the service now runs as LocalSystem) is unreliable: WSL distros are registered per-user and SYSTEM may resolve to a different default user. Needs manual testing. See README for details.
 - **Service install/control requires an elevated shell** — non-admin `service.py install` fails with "Access is denied. (5)" at the pywintypes DLL copy into the Python base dir (a protected location). Harmless; retry from an Administrator shell. `deploy.py` self-elevates via UAC.
+- **Store (WindowsApps) Python breaks pywin32 install even as admin** — pywin32 copies `pywintypes*.dll` next to the base `python*.dll`; for the Microsoft Store Python that target is `C:\Program Files\WindowsApps\...`, protected even from Administrators. Fix: use a python.org Python (recreate the venv) or grant `icacls ... /grant Administrators:F /T` on the package folder. Affects any device whose venv was built from a Store Python — `deploy.py` will hit it at the install step too.
 - **Lesson relevance is keyword-based, not semantic** — `get_relevant_lessons` uses token overlap + recency. Semantic/vector search would be more accurate but costs more.
 - **Log rotation is size-based, not time-based** — `conversations.jsonl.1` / `audit_log.jsonl.1` are kept as single rotated backups, not a dated archive.
 - **Single-user design** — history is per-chat but the bot is designed for one trusted user. Multi-user scenarios are not tested.
