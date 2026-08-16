@@ -134,7 +134,7 @@ Central file. Key globals:
 ### `monitor.py`
 Background tasks started in `post_init` (all cancelled in `post_shutdown`):
 - `monitor_models(bot)` — every `MODEL_CHECK_INTERVAL` seconds, fetches the Ollama model list. The first successful fetch sets a baseline; any model that appears later triggers a Telegram notification to all `ALLOWED_USER_IDS`. No spam on startup/Ollama downtime because baseline only sets on a successful fetch.
-- `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed.
+- `check_for_updates(bot)` — every `GIT_UPDATE_CHECK_INTERVAL` seconds, runs `git fetch origin` in a worker thread (`asyncio.to_thread`) and compares local HEAD to `@{u}`. If behind: with `AUTO_PULL=true` it runs `git pull --ff-only` and notifies the new commit; with `AUTO_PULL=false` it only notifies that an update is available. Failed pulls (local changes/conflicts) are reported, not swallowed. All git invocations go through `_git()`, which passes `-c safe.directory=<repo>` — the LocalSystem service doesn't own the repo, so git would otherwise refuse with "dubious ownership" (bug #22).
 - `pull_updates() -> (message, changed)` — manual update for `/update`; fetches and ff-pulls, returns a Telegram-ready message and whether anything changed.
 - `restart_bot()` — restarts the process. Priority: `RESTART_COMMAND` if set → if `ALFRED_SERVICE_NAME` env is set (pywin32 service mode) spawn a detached `venv python service.py restart` and `os._exit(0)` → otherwise self-respawn (`python main.py`) in dev mode. So the pywin32 service needs **no** `RESTART_COMMAND` in `.env`.
 - `run_cron_scheduler(bot)` — every `CRON_CHECK_INTERVAL` seconds, calls `cron.fire_due_jobs()` in a worker thread and sends each due reminder to all `ALLOWED_USER_IDS` via Telegram.
@@ -146,13 +146,14 @@ pywin32 `ServiceFramework` wrapper replacing WinSW (`alfred-service.xml`, now de
 - `Install` classmethod additionally sets SCM failure actions (`SC_ACTION_RESTART` after 10s then 30s, then `SC_ACTION_NONE`) so a crash auto-restarts the service.
 - `setup_logging()` adds a rotating `logs/alfred-service.log` handler (SCM does not capture stdout/stderr).
 - CLI via `win32serviceutil.HandleCommandLine` (elevated): `install --startup delayed`, `start`, `stop`, `restart`, `remove`, `update`.
+- The service host (`pythonservice.exe`) and its load-time DLLs (`python*.dll`, `vcruntime140*.dll`, `pywintypes*.dll`) are copied into `venv\Scripts` on install/update (`_ensure_host_in_scripts`), and `_exe_name_` points the registered ImagePath there. On Python 3.13 an exe at the venv *root* is treated as a base install and `servicemanager` can't be imported (bug #21); the Scripts placement works on every supported Python.
 - **Gotcha:** never import `telegram_bot` at module top of `service.py` — install/remove run without the bot context and must stay light.
 
 ### `deploy.py`
 Push-update script: `python deploy.py <target> [--dry-run] [--no-elevate]`. Targets from gitignored `deploy_config.json` (template auto-created with `dev`/`prod` local paths). Per target:
 1. `robocopy /MIR` the repo excluding `.env`, `data/`, `venv/`, `logs/`, `__pycache__`, `*.pyc`, `deploy_config.json` — **`.env` and `data/` are never overwritten** (each device keeps its own token/Ollama URL/memory).
 2. Ensure venv + `pip install -r requirements.txt`.
-3. Reinstall the service: `stop` → `remove` → `install --startup delayed` → `start` (stop/remove failures are ignored).
+3. Reinstall the service: `stop` → `remove` → `install --startup delayed` → `start` (stop/remove failures are ignored). `ensure_service_host_dlls` copies the host's load-time DLLs into both the venv root and `venv\Scripts`, and the install moves `pythonservice.exe` into `Scripts` (bug #21).
 - Local targets run the steps directly; remote targets copy to `\\host\<drive>$` (admin share) and run the same steps over WinRM (`Invoke-Command`). Remote creds may live in the gitignored config `password` field or be prompted.
 - Self-elevates via UAC (`ShellExecuteW runas`) when not admin; `--no-elevate` forbids that.
 

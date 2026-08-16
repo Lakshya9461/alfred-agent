@@ -126,6 +126,9 @@ Per target, `deploy.py`:
    each device keeps its own token, Ollama URL, and memory.
 2. Creates the target's `venv` (if missing) and `pip install -r requirements.txt`.
 3. Reinstalls the service: `stop` → `remove` → `install --startup delayed` → `start`.
+   The install step also copies `pythonservice.exe` + its load-time DLLs into
+   `venv\Scripts\` and registers that as the service's ImagePath — required on
+   Python 3.13 (see the troubleshooting above), harmless on others.
 
 Remote targets are copied to the host's admin share (`\\host\c$`) and updated
 via WinRM (`Invoke-Command`); the host must have WinRM enabled and the user must
@@ -137,6 +140,9 @@ be an administrator there. Remote credentials can be stored in the (gitignored)
 The `/update` command in Telegram already runs `git pull --ff-only` and restarts.
 Under the pywin32 service, `monitor.restart_bot()` detects service mode and
 spawns a detached `service.py restart` (no `RESTART_COMMAND` needed in `.env`).
+The auto-updater runs as LocalSystem, which doesn't own the repo, so every git
+call passes `-c safe.directory=<repo>` — no per-machine "dubious ownership"
+workaround is needed.
 
 ### WSL2 note
 

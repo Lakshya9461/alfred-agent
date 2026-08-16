@@ -17,12 +17,12 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 - `telegram_bot.py` — all handlers/commands/callbacks; `post_init` starts background tasks and registers the Telegram command menu; `post_shutdown` cancels them.
 - `agent_loop.py` — `run_agent_turn()` async generator yields `AgentEvent`s; builds the system prompt, loops calling Ollama `/api/chat` with `tools` until `MAX_TOOL_ITERATIONS` or a final answer. Confirmation requests suspend on an `asyncio.Future`.
 - `tools/__init__.py` — `TOOL_REGISTRY` maps tool name → `{schema, func}`; `execute_tool()` dispatches. **Adding a tool = add entry here + (optionally) a mention in the system prompt in `agent_loop.py`.** Registered tools: `web_search`, `run_shell`, `remember_lesson`, `schedule_reminder`, `list_reminders`, `remove_reminder`, `schedule_batch_reminders`.
-- `monitor.py` — background tasks: `monitor_models` (new-Ollama-model alerts), `check_for_updates` (git fetch + auto `pull --ff-only`, notifies; does **not** restart), `run_cron_scheduler` (fires due cron reminders via Telegram).
+- `monitor.py` — background tasks: `monitor_models` (new-Ollama-model alerts), `check_for_updates` (git fetch + auto `pull --ff-only`, notifies; does **not** restart), `run_cron_scheduler` (fires due cron reminders via Telegram). Every git call passes `-c safe.directory=<repo>` — the service runs as SYSTEM, which doesn't own the repo.
 - `self_review.py` — every `SELF_REVIEW_EVERY_N_TURNS` turns, sends new `conversations.jsonl` lines to Ollama and saves extracted lessons.
 - `config.py` / `runtime_config.py` — static `.env` settings vs. mutable state (`CURRENT_MODEL`, `CURRENT_CONTEXT_LENGTH`, `SHELL_ENABLED`). All Ollama requests read from `runtime_config`, not `config`.
 - `ollama_utils.py` — model list + context-window detection.
-- `service.py` — pywin32 `ServiceFramework` (LocalSystem). `SvcDoRun` runs `telegram_bot.main()` in a thread and chdirs to the repo; `SvcStop` calls `telegram_bot.stop_bot()`. `stop_bot()` needs the `_APP`/`_LOOP` globals captured in `post_init` — don't move that assignment. Install sets SCM failure-restart actions.
-- `deploy.py` — `python deploy.py <target> [--dry-run]`: robocopy the repo (excluding `.env`/`data/`/`venv`/`logs`) to each target in `deploy_config.json`, recreate venv + deps, reinstall service (stop→remove→install→start). Remote targets use WinRM + admin share; `.env` is never touched.
+- `service.py` — pywin32 `ServiceFramework` (LocalSystem). `SvcDoRun` runs `telegram_bot.main()` in a thread and chdirs to the repo; `SvcStop` calls `telegram_bot.stop_bot()`. `stop_bot()` needs the `_APP`/`_LOOP` globals captured in `post_init` — don't move that assignment. Install sets SCM failure-restart actions. On install/update it copies `pythonservice.exe` + its load-time DLLs into `venv\Scripts` and registers that ImagePath via `_exe_name_` — on Python 3.13 a host at the venv root can't import `servicemanager` (see gotchas).
+- `deploy.py` — `python deploy.py <target> [--dry-run]`: robocopy the repo (excluding `.env`/`data/`/`venv`/`logs`) to each target in `deploy_config.json`, recreate venv + deps, reinstall service (stop→remove→install→start). Copies the service host exe + DLLs into both `venv\` and `venv\Scripts\` so `pythonservice.exe` can load. Remote targets use WinRM + admin share; `.env` is never touched.
 
 ## Gotchas (hard-earned)
 
@@ -34,6 +34,8 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 - **Cron reminders fire only while the bot process runs** (in-process scheduler, `data/cron_jobs.json`). Missed slots are skipped, not back-filled. `schedule_batch_reminders` exists because 25 timetable jobs would blow past `MAX_TOOL_ITERATIONS=10` as individual calls.
 - **Kill switch:** `/lockdown` persists `data/shell_lock.json`; `run_shell` refuses while `runtime_config.SHELL_ENABLED` is False. Dangerous commands (and all commands under `CONFIRM_ALL_COMMANDS`) need user confirmation via inline button, auto-cancelled after `CONFIRMATION_TIMEOUT_SECONDS`.
 - **Service runs as LocalSystem with `cwd=%SystemRoot%\System32`.** `config.py` must load `.env` from `PROJECT_ROOT` explicitly (never a bare `load_dotenv()`). `service.py` chdirs to the repo in `SvcDoRun` as a belt-and-braces measure. Service commands must run from an elevated shell (non-admin: `install` fails with access denied; `deploy.py` self-elevates via UAC).
+- **`pythonservice.exe` needs `venv\Scripts` placement + adjacent DLLs.** The host links `python*.dll`, `vcruntime140*.dll` **and `pywintypes*.dll`** at load time (any missing → instant exit 0xC0000135 `STATUS_DLL_NOT_FOUND`). And on **Python 3.13** an interpreter exe at the venv *root* is treated as a base install, so `venv\Lib\site-packages` (where `servicemanager` lives) never lands on `sys.path` and the host dies with "unable to locate the service manager". `service.py install` / `deploy.py` copy the host + DLLs into `venv\Scripts` and point the ImagePath there — preserve that when touching either file.
+- **The SYSTEM auto-updater can't touch your git repo without trust.** `monitor._git()` must keep passing `-c safe.directory=<repo>`, or the LocalSystem `git fetch`/`pull` fails with "dubious ownership" (the user owns the repo, SYSTEM doesn't).
 
 ## Verification quirks
 
@@ -43,4 +45,4 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 
 ## Docs
 
-- `progress.md` is the living architecture + bug log (bugs #1–18, env-var table, command table). **Update it on every change.** `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.
+- `progress.md` is the living architecture + bug log (bugs #1–22, env-var table, command table). **Update it on every change.** `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.
