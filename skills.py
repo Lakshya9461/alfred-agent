@@ -213,14 +213,26 @@ def load_skills(force: bool = False) -> list:
     return _skill_cache
 
 
-def format_skill_index(skills: list) -> str:
-    """Compact index for the system prompt."""
+def format_skill_index(skills: list, limit: int = 60, max_chars: int = 3500) -> str:
+    """Compact index for the system prompt or /skills output.
+
+    Caps both the number of lines and the total size so the result always fits
+    in a Telegram message (4096-char limit) — with hundreds of skills the full
+    list would exceed it and the send would fail silently."""
     if not skills:
         return "(no skills installed yet)"
     lines = []
     for s in sorted(skills, key=lambda x: (x["repo"], x["name"])):
         lines.append(f"- `{s['name']}` ({s['repo']}) — {s['description']}")
-    return "\n".join(lines)
+    out, used = [], 0
+    for ln in lines:
+        if len(out) >= limit or used + len(ln) + 1 > max_chars:
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    if len(out) < len(lines):
+        out.append(f"… and {len(skills) - len(out)} more")
+    return "\n".join(out)
 
 
 def read_skill(name: str) -> str:

@@ -54,4 +54,4 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 
 ## Docs
 
-- `progress.md` is the living architecture + bug log (bugs #1–26, env-var table, command table). **Update it on every change.** `progress_agent.md` is Alfred's own auto-maintained self-improvement journal (written by `self_improve.py`) — do not edit it by hand; it gets committed whenever the bot applies a change. `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.
+- `progress.md` is the living architecture + bug log (bugs #1–27, env-var table, command table). **Update it on every change.** `progress_agent.md` is Alfred's own auto-maintained self-improvement journal (written by `self_improve.py`) — do not edit it by hand; it gets committed whenever the bot applies a change. `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.
