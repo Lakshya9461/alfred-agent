@@ -37,9 +37,18 @@ def repo_name(url: str) -> str:
     return name or "repo"
 
 
+_GIT_ENV = {
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "",
+    "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10",
+}
+
+
 def _git(cwd: str, *args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     """Run git in a skills dir. safe.directory is passed per-invocation so the
-    LocalSystem service (which doesn't own the checkout) can fetch/pull."""
+    LocalSystem service (which doesn't own the checkout) can fetch/pull.
+    GIT_TERMINAL_PROMPT=0 + DEVNULL stdin make HTTPS/SSH fail fast instead of
+    hanging on an interactive credential prompt (there is no TTY in a service)."""
     trust = f"safe.directory={cwd.replace(os.sep, '/')}"
     return subprocess.run(
         ["git", "-c", trust, *args],
@@ -49,6 +58,8 @@ def _git(cwd: str, *args: str, timeout: int = 60) -> subprocess.CompletedProcess
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, **_GIT_ENV},
     )
 
 
@@ -93,7 +104,9 @@ def ensure_repos() -> dict:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,
+                    timeout=120,
+                    stdin=subprocess.DEVNULL,
+                    env={**os.environ, **_GIT_ENV},
                 )
                 if res.returncode != 0:
                     logger.warning(f"skills: clone {url} failed: {res.stderr.strip()[:200]}")

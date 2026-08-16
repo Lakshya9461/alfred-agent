@@ -359,24 +359,27 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @whitelist_only
 async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Refresh skill repos and list installed skills."""
-    status_msg = await update.message.reply_text("🧠 Refreshing skill repos...")
+    """List installed skills. Repo refresh runs in the background — never block
+    the reply on git, which can hang for minutes on slow/credential-prompting
+    hosts (the previous await made /skills look stuck)."""
+    def _refresh_bg():
+        try:
+            skills.ensure_repos()
+        except Exception as e:
+            logger.warning(f"/skills: background refresh failed: {e}")
+
     try:
-        await asyncio.wait_for(asyncio.to_thread(skills.ensure_repos), timeout=180)
-    except asyncio.TimeoutError:
-        logger.warning("/skills: repo refresh timed out; using current cache")
+        asyncio.get_running_loop().run_in_executor(None, _refresh_bg)
     except Exception as e:
-        logger.warning(f"/skills: repo refresh failed: {e}")
+        logger.warning(f"/skills: could not schedule background refresh: {e}")
+
     index = skills.format_skill_index(skills.load_skills())
-    reply = (
+    await update.message.reply_text(
         f"📘 Installed skills:\n\n{index}\n\n"
         "Ask me to use a skill and I'll load its instructions automatically. "
-        "New skill-repo candidates are offered via Install/Dismiss buttons as they're found."
+        "Skill repos refresh in the background; new candidates are offered via "
+        "Install/Dismiss buttons as they're found."
     )
-    try:
-        await status_msg.edit_text(reply)
-    except Exception:
-        await update.message.reply_text(reply)
 
 @whitelist_only
 async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

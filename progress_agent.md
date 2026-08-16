@@ -81,3 +81,21 @@ Update `tools/executor.py` (or your custom subprocess wrapper) to wrap PowerShel
 ## [SKIP] 2026-08-16 14:30 — Recently failed shell command — investigate and improve handling
 
 Target file 'tools/executor.py' not found in repository file list; cannot safely apply error handling changes to non-existent or unlisted paths without risking structural integrity of existing execution pipelines.
+
+
+---
+
+## [RESEARCH] 2026-08-16 14:36 — Recently failed shell command — investigate and improve handling
+
+### Search: Recently failed shell command — investigate and improve handling best practice 2026
+No results found.
+
+### Critic (qwen3.5:9b)
+Update your custom tool implementation file (e.g., `tools/execute.py` or where subprocess is invoked in `bot.py`) to wrap all shell commands in a try/except block that catches `subprocess.CalledProcessError`. This ensures the bot recovers gracefully when the LLM requests commands with non-existent targets, preventing application crashes due to expected failures on Windows.
+
+
+---
+
+## [SKIP] 2026-08-16 14:38 — Recently failed shell command — investigate and improve handling
+
+no concrete finding
