@@ -4,7 +4,7 @@ pywin32 Windows service wrapper for Alfred.
 Replaces the old WinSW service (alfred-service.xml). Runs the bot as LocalSystem.
 Service-control commands (must run from an elevated shell):
 
-    venv\\Scripts\\python service.py install --startup delayed
+    venv\\Scripts\\python service.py install --startup auto
     venv\\Scripts\\python service.py start
     venv\\Scripts\\python service.py stop
     venv\\Scripts\\python service.py restart
@@ -130,7 +130,9 @@ class AlfredService(win32serviceutil.ServiceFramework):
 
     @classmethod
     def _set_failure_actions(cls):
-        """Restart on crash: after 10s, then 30s, then leave stopped."""
+        """Restart on crash: after 10s, then 30s, then leave stopped. A
+        non-zero reset period (1 day) forgets past failures, so a crash storm
+        on one boot doesn't permanently suppress the service on later boots."""
         hscm = win32service.OpenSCManager(
             None, None, win32service.SC_MANAGER_ALL_ACCESS
         )
@@ -143,7 +145,7 @@ class AlfredService(win32serviceutil.ServiceFramework):
                     hsvc,
                     win32service.SERVICE_CONFIG_FAILURE_ACTIONS,
                     (
-                        0,   # reset period (seconds)
+                        86400,   # reset period (seconds) — count failures only within a day
                         None,  # reboot message
                         None,  # reboot command
                         [
@@ -192,8 +194,8 @@ class AlfredService(win32serviceutil.ServiceFramework):
 
 if __name__ == "__main__":
     # pywin32's getopt requires options to precede the command token
-    # (`service.py --startup delayed install`). People naturally type
-    # `service.py install --startup delayed`, so reorder the command to the end
+    # (`service.py --startup auto install`). People naturally type
+    # `service.py install --startup auto`, so reorder the command to the end
     # when everything after it is an option.
     if len(sys.argv) > 2:
         first = sys.argv[1]
@@ -204,8 +206,8 @@ if __name__ == "__main__":
         ):
             sys.argv = [sys.argv[0]] + sys.argv[2:] + [first]
     # After any reorder the command token sits at the end (getopt options were
-    # moved before it). Use the last arg so `install --startup delayed` and the
-    # canonical `--startup delayed install` both hit this branch.
+    # moved before it). Use the last arg so `install --startup auto` and the
+    # canonical `--startup auto install` both hit this branch.
     cmd = sys.argv[-1] if len(sys.argv) > 1 else None
     if cmd in ("install", "update"):
         _ensure_host_in_scripts()

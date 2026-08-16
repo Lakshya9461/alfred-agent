@@ -4,7 +4,7 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 
 ## Commands
 
-- Run (dev): `.\venv\Scripts\python main.py` (venv is repo-local). Service mode = pywin32 (`service.py`, runs as **LocalSystem**): `.\venv\Scripts\python service.py install --startup delayed` / `start` / `stop` / `restart` / `remove` — **must be elevated**. `deploy.py <target>` pushes code + reinstalls the service on other devices (targets in gitignored `deploy_config.json`).
+- Run (dev): `.\venv\Scripts\python main.py` (venv is repo-local). Service mode = pywin32 (`service.py`, runs as **LocalSystem**): `.\venv\Scripts\python service.py install --startup auto` / `start` / `stop` / `restart` / `remove` — **must be elevated**. `deploy.py <target>` pushes code + reinstalls the service on other devices (targets in gitignored `deploy_config.json`).
 - **No test/lint/typecheck tooling exists.** Don't add any. Verify with:
   - Syntax: `.\venv\Scripts\python -m py_compile <files>`
   - Logic: throwaway scripts via `.\venv\Scripts\python -c "..."` importing the module directly (see "Verification quirks").
@@ -45,4 +45,4 @@ Telegram bot agent ("Alfred") that runs an Ollama tool-calling loop, executing s
 
 ## Docs
 
-- `progress.md` is the living architecture + bug log (bugs #1–22, env-var table, command table). **Update it on every change.** `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.
+- `progress.md` is the living architecture + bug log (bugs #1–23, env-var table, command table). **Update it on every change.** `README.md` covers service deployment and is authoritative for WinSW/WSL quirks.

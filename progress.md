@@ -145,7 +145,7 @@ pywin32 `ServiceFramework` wrapper replacing WinSW (`alfred-service.xml`, now de
 - `SvcStop` — runs on a separate SCM thread; calls `telegram_bot.stop_bot()` then signals the event.
 - `Install` classmethod additionally sets SCM failure actions (`SC_ACTION_RESTART` after 10s then 30s, then `SC_ACTION_NONE`) so a crash auto-restarts the service.
 - `setup_logging()` adds a rotating `logs/alfred-service.log` handler (SCM does not capture stdout/stderr).
-- CLI via `win32serviceutil.HandleCommandLine` (elevated): `install --startup delayed`, `start`, `stop`, `restart`, `remove`, `update`.
+- CLI via `win32serviceutil.HandleCommandLine` (elevated): `install --startup auto`, `start`, `stop`, `restart`, `remove`, `update`. Plain auto-start (not delayed) so the service comes up with the boot burst — delayed start adds minutes of timing-dependent lag on slow machines and can look like "only starts after login".
 - The service host (`pythonservice.exe`) and its load-time DLLs (`python*.dll`, `vcruntime140*.dll`, `pywintypes*.dll`) are copied into `venv\Scripts` on install/update (`_ensure_host_in_scripts`), and `_exe_name_` points the registered ImagePath there. On Python 3.13 an exe at the venv *root* is treated as a base install and `servicemanager` can't be imported (bug #21); the Scripts placement works on every supported Python.
 - **Gotcha:** never import `telegram_bot` at module top of `service.py` — install/remove run without the bot context and must stay light.
 
@@ -153,7 +153,7 @@ pywin32 `ServiceFramework` wrapper replacing WinSW (`alfred-service.xml`, now de
 Push-update script: `python deploy.py <target> [--dry-run] [--no-elevate]`. Targets from gitignored `deploy_config.json` (template auto-created with `dev`/`prod` local paths). Per target:
 1. `robocopy /MIR` the repo excluding `.env`, `data/`, `venv/`, `logs/`, `__pycache__`, `*.pyc`, `deploy_config.json` — **`.env` and `data/` are never overwritten** (each device keeps its own token/Ollama URL/memory).
 2. Ensure venv + `pip install -r requirements.txt`.
-3. Reinstall the service: `stop` → `remove` → `install --startup delayed` → `start` (stop/remove failures are ignored). `ensure_service_host_dlls` copies the host's load-time DLLs into both the venv root and `venv\Scripts`, and the install moves `pythonservice.exe` into `Scripts` (bug #21).
+3. Reinstall the service: `stop` → `remove` → `install --startup auto` → `start` (stop/remove failures are ignored). `ensure_service_host_dlls` copies the host's load-time DLLs into both the venv root and `venv\Scripts`, and the install moves `pythonservice.exe` into `Scripts` (bug #21).
 - Local targets run the steps directly; remote targets copy to `\\host\<drive>$` (admin share) and run the same steps over WinRM (`Invoke-Command`). Remote creds may live in the gitignored config `password` field or be prompted.
 - Self-elevates via UAC (`ShellExecuteW runas`) when not admin; `--no-elevate` forbids that.
 
@@ -256,6 +256,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 20 | Service starts then dies instantly; `service.py start` → "did not respond in a timely fashion", and `pythonservice.exe -debug` exits `-1073741515` (0xC0000135 `STATUS_DLL_NOT_FOUND`) | `pythonservice.exe` loads `python*.dll`, `vcruntime140*.dll` **and `pywintypes*.dll`** at process start (verified via PE import table), but the Python install dir and `pywin32_system32` aren't on the service's DLL search path. Fix: copy all of those next to `pythonservice.exe` in the venv root. `deploy.py` now does this automatically (`ensure_service_host_dlls`, reading `pyvenv.cfg` home + `pywin32_system32`) for local and remote targets. Per-user python.org installs also break the service (interpreter registered only under the user's hive) — install "for all users" |
 | 21 | `pythonservice.exe -debug` prints "PythonService was unable to locate the service manager"; Application log (Event ID 14, "Python Service") shows `ModuleNotFoundError: No module named 'servicemanager'` | **Python 3.13** path resolver: an interpreter exe at the venv *root* is treated as a `Scripts\python.exe` layout, so it assumes the venv root is the exe's *parent*, never adds `venv\Lib\site-packages` to `sys.path`, and `servicemanager.pyd` can't be imported (dev's 3.14 computes the prefix correctly, hiding the bug locally). Fix: run the host from `venv\Scripts\` (next to `python.exe`). `service.py` now copies `pythonservice.exe` + DLLs into `Scripts` on install/update and registers that ImagePath via `_exe_name_`; `deploy.py` copies host deps into both venv root and `Scripts` (belt-and-braces across 3.13/3.14) |
 | 22 | Prod service (LocalSystem) `check_for_updates` logs `fatal: detected dubious ownership in repository at 'C:/1/alfred-agent'` — SYSTEM doesn't own the repo, so git refuses fetch/pull | Pass `-c safe.directory=<repo>` (forward-slashed) on every `monitor._git()` invocation; trusts the path for that process only, no global/system config needed, works on every deploy host |
+| 23 | Service set to **delayed** auto-start; on the slow boot of the headless prod box the delayed-start batch fired only minutes later (looked like "service starts only after SSH login"). Also the failure-action reset period was 0, so a past crash storm could permanently suppress auto-start on later boots | Use plain `--startup auto` (boot burst, no delayed-batch timing), and set the SCM failure-action reset period to 1 day (86400s) so old failures don't suppress future starts. Ollama on prod runs as a LocalSystem NSSM `AUTO_START` service (WinGet install), so it's up at boot independently of any login |
 
 ---
 
@@ -309,7 +310,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 .\venv\Scripts\python main.py
 
 # As a Windows Service (pywin32 — elevated shell; see README.md for full steps)
-.\venv\Scripts\python service.py install --startup delayed
+.\venv\Scripts\python service.py install --startup auto
 .\venv\Scripts\python service.py start
 .\venv\Scripts\python service.py restart   # or stop / remove
 Get-Service alfred-agent

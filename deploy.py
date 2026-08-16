@@ -12,7 +12,7 @@ Steps per target:
   1. Mirror the repo with robocopy, excluding .env / data/ / venv/ / logs/
      / __pycache__ / *.pyc — per-device .env and data/ are never touched.
   2. Create the venv if missing and `pip install -r requirements.txt`.
-  3. (Re)install the pywin32 service: stop -> remove -> install --startup delayed -> start.
+  3. (Re)install the pywin32 service: stop -> remove -> install --startup auto -> start.
 
 Service install needs an admin shell; deploy.py re-launches itself elevated via
 UAC when required (pass --no-elevate to forbid that).
@@ -88,7 +88,7 @@ Write-Host "[service] stopping (ignored if absent) ..."
 Write-Host "[service] removing (ignored if absent) ..."
 & "$Dest\venv\Scripts\python.exe" "$Dest\service.py" remove 2>$null
 Write-Host "[service] installing ..."
-& "$Dest\venv\Scripts\python.exe" "$Dest\service.py" install --startup delayed
+& "$Dest\venv\Scripts\python.exe" "$Dest\service.py" install --startup auto
 if ($LASTEXITCODE -ne 0) { Write-Host "INSTALL FAILED"; exit $LASTEXITCODE }
 Write-Host "[service] starting ..."
 & "$Dest\venv\Scripts\python.exe" "$Dest\service.py" start
@@ -226,7 +226,7 @@ def deploy_local(target: dict, dry_run: bool) -> int:
     for step in ["stop", "remove"]:
         print(f"[service] {step} (ignored if absent) ...")
         run([venv_py, service, step], dry_run)
-    print("[service] install --startup delayed ...")
+    print("[service] install --startup auto ...")
     if run([venv_py, service, "install", "--startup", "delayed"], dry_run) != 0:
         return 1
     print("[service] start ...")

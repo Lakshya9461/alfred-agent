@@ -39,7 +39,7 @@ Control Manager is configured to auto-restart the service if it crashes.
 2. Open an **Administrator** PowerShell (right-click → "Run as administrator",
    *not* just any terminal — see below), cd to the project directory, then:
    ```powershell
-   .\venv\Scripts\python service.py install --startup delayed
+   .\venv\Scripts\python service.py install --startup auto
    .\venv\Scripts\python service.py start
    ```
 3. Check it: `Get-Service alfred-agent`.
@@ -125,7 +125,7 @@ Per target, `deploy.py`:
    `logs/`, `__pycache__`, `*.pyc`. **`.env` and `data/` are never touched** —
    each device keeps its own token, Ollama URL, and memory.
 2. Creates the target's `venv` (if missing) and `pip install -r requirements.txt`.
-3. Reinstalls the service: `stop` → `remove` → `install --startup delayed` → `start`.
+3. Reinstalls the service: `stop` → `remove` → `install --startup auto` → `start`.
    The install step also copies `pythonservice.exe` + its load-time DLLs into
    `venv\Scripts\` and registers that as the service's ImagePath — required on
    Python 3.13 (see the troubleshooting above), harmless on others.
