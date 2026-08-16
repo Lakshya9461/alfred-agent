@@ -154,6 +154,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 *System*\n"
         "`/status` — Show bot status and uptime\n"
         "`/update` — Pull the latest code and restart the bot\n"
+        "`/restart` — Restart the bot process only\n"
         "`/lockdown` — Disable all shell execution (kill switch)\n"
         "`/unlock` — Re-enable shell execution"
     )
@@ -542,6 +543,19 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(_delayed_restart())
 
 @whitelist_only
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Restart the bot process (service or dev mode) without touching git."""
+    from monitor import restart_bot
+
+    await update.message.reply_text("♻️ *Restarting in 3 seconds...*", parse_mode="Markdown")
+
+    async def _delayed_restart():
+        await asyncio.sleep(3)
+        restart_bot()
+
+    asyncio.create_task(_delayed_restart())
+
+@whitelist_only
 async def lockdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Kill switch — disable all shell execution remotely."""
     runtime_config.set_shell_enabled(False)
@@ -685,6 +699,7 @@ async def post_init(app: Application):
         BotCommand("cron",    "List scheduled reminders"),
         BotCommand("skills",  "List installed skills"),
         BotCommand("update",  "Pull the latest code and restart the bot"),
+        BotCommand("restart", "Restart the bot process only"),
         BotCommand("lockdown", "Disable all shell execution (kill switch)"),
         BotCommand("unlock",  "Re-enable shell execution"),
     ])
@@ -739,6 +754,7 @@ def main():
     app.add_handler(CommandHandler("cron",    cron_command))
     app.add_handler(CommandHandler("skills",  skills_command))
     app.add_handler(CommandHandler("update",  update_command, block=False))
+    app.add_handler(CommandHandler("restart", restart_command, block=False))
     app.add_handler(CommandHandler("lockdown", lockdown_command))
     app.add_handler(CommandHandler("unlock",   unlock_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text, block=False))
