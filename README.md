@@ -71,15 +71,16 @@ Administrator shell.
 >
 > **Service starts then dies instantly** — `service.py start` reports "did not
 > respond in a timely fashion" and running `pythonservice.exe -debug alfred-agent`
-> exits with `-1073741515` (0xC0000135, `STATUS_DLL_NOT_FOUND`). That means the
-> service host can't load the base interpreter DLL: `pythonservice.exe` needs
-> `python*.dll` (+ `vcruntime140*.dll`) next to it, but the Python install dir
-> isn't on its DLL search path. `deploy.py` copies them into the venv root
+> exits with `-1073741515` (0xC0000135, `STATUS_DLL_NOT_FOUND`). The host exe
+> links against `python*.dll`, `vcruntime140*.dll` **and `pywintypes*.dll`** at
+> load time, and none of those are on the service's DLL search path. Copy them
+> next to `pythonservice.exe` in the venv root. `deploy.py` does this
 > automatically; manually:
 > ```powershell
 > Copy-Item "C:\Program Files\Python313\python313.dll" ".\venv\"
 > Copy-Item "C:\Program Files\Python313\vcruntime140.dll" ".\venv\"
 > Copy-Item "C:\Program Files\Python313\vcruntime140_1.dll" ".\venv\"
+> Copy-Item ".\venv\Lib\site-packages\pywin32_system32\pywintypes313.dll" ".\venv\"
 > ```
 > Also prefer a python.org install **for all users** — a per-user install
 > registers the interpreter only under your account's hive, which the

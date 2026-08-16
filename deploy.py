@@ -45,24 +45,30 @@ if (-not (Test-Path "$Dest\venv\Scripts\python.exe")) {
     python -m venv "$Dest\venv"
 }
 & "$Dest\venv\Scripts\python.exe" -m pip install -q -r "$Dest\requirements.txt"
-# pythonservice.exe needs the base interpreter DLLs adjacent to it, else the
-# service dies instantly (STATUS_DLL_NOT_FOUND 0xC0000135).
+# pythonservice.exe needs python*.dll, vcruntime140*.dll and pywintypes*.dll
+# adjacent to it, else the service dies instantly (STATUS_DLL_NOT_FOUND 0xC0000135).
 $cfg = "$Dest\venv\pyvenv.cfg"
 if (Test-Path $cfg) {
     $home = (Get-Content $cfg | Where-Object { $_ -match '^home' }) -split '=', 2 | Select-Object -Last 1
     $home = $home.Trim()
     if ($home -and (Test-Path $home)) {
-        Get-ChildItem -Path $home -Filter 'python*.dll' -File | ForEach-Object {
-            if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
-                Write-Host "[venv] copying $($_.Name) (service host dependency)"
-                Copy-Item $_.FullName "$Dest\venv\"
+        foreach ($f in @('python*.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            Get-ChildItem -Path $home -Filter $f -File | ForEach-Object {
+                if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
+                    Write-Host "[venv] copying $($_.Name) (service host dependency)"
+                    Copy-Item $_.FullName "$Dest\venv\"
+                }
             }
         }
-        foreach ($v in @('vcruntime140.dll', 'vcruntime140_1.dll')) {
-            $srcV = Join-Path $home $v
-            if ((Test-Path $srcV) -and (-not (Test-Path "$Dest\venv\$v"))) {
-                Write-Host "[venv] copying $v (service host dependency)"
-                Copy-Item $srcV "$Dest\venv\"
+    }
+    $pyw32 = "$Dest\venv\Lib\site-packages\pywin32_system32"
+    if (Test-Path $pyw32) {
+        foreach ($f in @('pywintypes*.dll', 'pythoncom*.dll')) {
+            Get-ChildItem -Path $pyw32 -Filter $f -File | ForEach-Object {
+                if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
+                    Write-Host "[venv] copying $($_.Name) (service host dependency)"
+                    Copy-Item $_.FullName "$Dest\venv\"
+                }
             }
         }
     }
@@ -139,10 +145,12 @@ def unc_path(target: dict) -> str:
 
 
 def ensure_service_host_dlls(dest: str) -> None:
-    """pythonservice.exe needs the base interpreter DLLs adjacent to it, or the
-    service dies instantly with STATUS_DLL_NOT_FOUND (0xC0000135). The Python
-    home isn't on the service's DLL search path. Copy python*.dll + vcruntime
-    from the venv's base install into the venv root if missing."""
+    """pythonservice.exe loads python*.dll, vcruntime140*.dll AND
+    pywintypes*.dll at process start. None of those are on the service's DLL
+    search path, so without copies next to the host exe the service dies
+    instantly with STATUS_DLL_NOT_FOUND (0xC0000135). Copy the base
+    interpreter DLLs from the venv's home, and the pywin32 DLLs from
+    pywin32_system32, into the venv root if missing."""
     venv = os.path.join(dest, "venv")
     cfg = os.path.join(venv, "pyvenv.cfg")
     if not os.path.exists(cfg):
@@ -156,6 +164,13 @@ def ensure_service_host_dlls(dest: str) -> None:
         return
     for pattern in ("python*.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
         for src in glob.glob(os.path.join(home, pattern)):
+            dst = os.path.join(venv, os.path.basename(src))
+            if not os.path.exists(dst):
+                print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
+                shutil.copy2(src, dst)
+    pywin32_sys = os.path.join(venv, "Lib", "site-packages", "pywin32_system32")
+    for pattern in ("pywintypes*.dll", "pythoncom*.dll"):
+        for src in glob.glob(os.path.join(pywin32_sys, pattern)):
             dst = os.path.join(venv, os.path.basename(src))
             if not os.path.exists(dst):
                 print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
