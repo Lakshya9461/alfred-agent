@@ -90,8 +90,11 @@ SELF_IMPROVE_INTERVAL = int(os.getenv("SELF_IMPROVE_INTERVAL", "1800"))
 # Hard cap on autonomous code applies per rolling day (safety valve).
 SELF_IMPROVE_MAX_PER_DAY = int(os.getenv("SELF_IMPROVE_MAX_PER_DAY", "3"))
 # Second Ollama model used as a "critic" for second opinions during research.
-# Empty = reuse the active model.
+# Empty = reuse the self-improve model.
 CRITIC_MODEL = os.getenv("CRITIC_MODEL", "")
+# Model used by the self-improvement loop (research, critic, propose, apply).
+# Empty = reuse the active conversation model.
+SELF_IMPROVE_MODEL = os.getenv("SELF_IMPROVE_MODEL", "qwen3.8:latest")
 # Max files a single autonomous apply may touch (keep patches tiny).
 SELF_IMPROVE_MAX_FILES = int(os.getenv("SELF_IMPROVE_MAX_FILES", "2"))
 # The self-improvement journal (committed to git).

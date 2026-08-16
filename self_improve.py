@@ -28,6 +28,7 @@ from config import (
     SELF_IMPROVE_INTERVAL,
     SELF_IMPROVE_MAX_PER_DAY,
     SELF_IMPROVE_MAX_FILES,
+    SELF_IMPROVE_MODEL,
     CRITIC_MODEL,
     PROGRESS_AGENT_FILE,
     OLLAMA_API_URL,
@@ -140,14 +141,18 @@ def _git_ok() -> bool:
 # ── ollama chat helper (sync; call via asyncio.to_thread) ────────────────────
 
 def _ollama_chat(system: str, prompt: str, model: str = None) -> str:
-    """Single non-tool Ollama /api/chat completion."""
+    """Single non-tool Ollama /api/chat completion.
+
+    Defaults to the self-improvement model (SELF_IMPROVE_MODEL), falling back to
+    the active conversation model when unset.
+    """
     base = OLLAMA_API_URL.rstrip("/")
     try:
         with httpx.Client(timeout=OLLAMA_REQUEST_TIMEOUT) as client:
             resp = client.post(
                 f"{base}/api/chat",
                 json={
-                    "model": model or CURRENT_MODEL,
+                    "model": model or SELF_IMPROVE_MODEL or CURRENT_MODEL,
                     "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": prompt},
@@ -215,7 +220,7 @@ def _research_sync(candidate: dict) -> str:
         findings.append(f"### Search: {q}\n{search(q, max_results=4)}")
 
     detail = candidate.get("detail", "")
-    critic = CRITIC_MODEL or CURRENT_MODEL
+    critic = CRITIC_MODEL or SELF_IMPROVE_MODEL or CURRENT_MODEL
     critic_prompt = (
         f"You are a senior software reviewer consulted for a second opinion.\n"
         f"Improvement topic: {topic}\n"
