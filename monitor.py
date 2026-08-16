@@ -103,9 +103,14 @@ async def check_for_updates(bot):
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
-    """Run a git command in the project root."""
+    """Run a git command in the project root.
+
+    safe.directory is passed per-invocation: the service runs as LocalSystem,
+    which doesn't own the repo, so git would refuse ('dubious ownership')
+    without trusting the path explicitly."""
+    trust = f"safe.directory={PROJECT_ROOT.replace(os.sep, '/')}"
     return subprocess.run(
-        ["git", *args],
+        ["git", "-c", trust, *args],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
