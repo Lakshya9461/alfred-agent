@@ -361,14 +361,22 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Refresh skill repos and list installed skills."""
     status_msg = await update.message.reply_text("🧠 Refreshing skill repos...")
-    await asyncio.to_thread(skills.ensure_repos)
+    try:
+        await asyncio.wait_for(asyncio.to_thread(skills.ensure_repos), timeout=180)
+    except asyncio.TimeoutError:
+        logger.warning("/skills: repo refresh timed out; using current cache")
+    except Exception as e:
+        logger.warning(f"/skills: repo refresh failed: {e}")
     index = skills.format_skill_index(skills.load_skills())
     reply = (
-        f"📘 *Installed skills:*\n\n{index}\n\n"
+        f"📘 Installed skills:\n\n{index}\n\n"
         "Ask me to use a skill and I'll load its instructions automatically. "
         "New skill-repo candidates are offered via Install/Dismiss buttons as they're found."
     )
-    await status_msg.edit_text(reply, parse_mode="Markdown")
+    try:
+        await status_msg.edit_text(reply)
+    except Exception:
+        await update.message.reply_text(reply)
 
 @whitelist_only
 async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -606,12 +614,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = parts[1] if len(parts) > 1 else "no"
         value = parts[2] if len(parts) > 2 else ""
         if action == "yes":
-            await query.edit_message_text(f"🧠 Installing skill repo `{skills.repo_name(value)}`...", parse_mode="Markdown")
+            await query.edit_message_text(
+                f"🧠 Installing skill repo {skills.repo_name(value)}..."
+            )
             await asyncio.to_thread(skills.enable_repo, value)
             await query.edit_message_text(
-                f"✅ Skill repo installed and will stay updated in the background.\n"
-                f"Run /skills to see the skill index.",
-                parse_mode="Markdown"
+                "✅ Skill repo installed and will stay updated in the background.\n"
+                "Run /skills to see the skill index."
             )
         else:
             await asyncio.to_thread(skills.ignore_repo, value)

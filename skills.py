@@ -223,8 +223,28 @@ def read_skill(name: str) -> str:
     return f"Skill '{name}' not found. Installed skills: {available}"
 
 
+SEARCH_QUERIES = [
+    "agent skills",
+    "claude skills",
+    "agentic skills",
+    "ai agent skills",
+    "agent tools",
+    "llm agent skills",
+]
+
+
 def search_candidates() -> list:
-    """GitHub API search for promising agent-skill repos (sorted by stars)."""
+    """GitHub API search for promising agent-skill repos.
+
+    The query rotates through several phrasings across calls (persisted in the
+    config file), so repeated discovery passes surface DIFFERENT repos instead
+    of always returning the same top results for one fixed query.
+    """
+    cfg = load_config()
+    idx = int(cfg.get("search_idx", 0))
+    query = SEARCH_QUERIES[idx % len(SEARCH_QUERIES)]
+    cfg["search_idx"] = idx + 1
+    save_config(cfg)
     try:
         import httpx
 
@@ -232,7 +252,7 @@ def search_candidates() -> list:
             resp = client.get(
                 "https://api.github.com/search/repositories",
                 params={
-                    "q": "agent skills",
+                    "q": query,
                     "sort": "stars",
                     "order": "desc",
                     "per_page": 20,

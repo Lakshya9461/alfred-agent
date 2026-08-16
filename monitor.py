@@ -102,11 +102,11 @@ async def update_skills(bot):
         for cand in candidates[:2]:
             reason = await asyncio.to_thread(skills.reason_candidate, cand)
             msg = (
-                f"🧠 *New skill repo candidate:*\n\n"
-                f"**{cand['full_name']}** ⭐{cand['stars']}\n"
+                f"🧠 New skill repo candidate:\n\n"
+                f"{cand['full_name']} (⭐{cand['stars']})\n"
                 f"{cand['description']}\n\n"
-                f"*Why install:* {reason or 'no reason available'}\n\n"
-                f"[Repo]({cand['html_url']})"
+                f"Why install: {reason or 'no reason available'}\n\n"
+                f"Repo: {cand['html_url']}"
             )
             reply = {
                 "inline_keyboard": [
@@ -119,11 +119,12 @@ async def update_skills(bot):
             for user_id in TELEGRAM_ALLOWED_USER_IDS:
                 try:
                     await bot.send_message(
-                        chat_id=user_id, text=msg, parse_mode="Markdown",
-                        reply_markup=reply,
+                        chat_id=user_id, text=msg, reply_markup=reply,
                     )
                 except Exception as e:
                     logger.error(f"update_skills: failed to notify {user_id}: {e}")
+            # Shown once — don't re-offer this candidate on the next cycle.
+            await asyncio.to_thread(skills.mark_seen, cand["full_name"])
 
         await asyncio.sleep(SKILL_UPDATE_INTERVAL)
 
