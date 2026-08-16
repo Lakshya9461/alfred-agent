@@ -100,10 +100,12 @@ async def update_skills(bot):
             candidates = []
 
         for cand in candidates[:2]:
+            reason = await asyncio.to_thread(skills.reason_candidate, cand)
             msg = (
                 f"🧠 *New skill repo candidate:*\n\n"
                 f"**{cand['full_name']}** ⭐{cand['stars']}\n"
                 f"{cand['description']}\n\n"
+                f"*Why install:* {reason or 'no reason available'}\n\n"
                 f"[Repo]({cand['html_url']})"
             )
             reply = {

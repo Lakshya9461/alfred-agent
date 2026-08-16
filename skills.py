@@ -279,3 +279,32 @@ def new_candidates() -> list:
             continue
         out.append(c)
     return out
+
+
+def reason_candidate(candidate: dict) -> str:
+    """Ask the self-improve model why this repo's skills are worth installing.
+
+    Returns a short rationale (or empty string if the model is unreachable).
+    Lazy import of self_improve avoids a module-level import cycle.
+    """
+    try:
+        from self_improve import _ollama_chat
+    except Exception as e:
+        logger.warning(f"skills: cannot import chat helper: {e}")
+        return ""
+    installed = ", ".join(sorted({s["repo"] for s in load_skills()})) or "none yet"
+    prompt = (
+        "A new skill-repo candidate was discovered for this Telegram agent "
+        "(python-telegram-bot + Ollama tool loop on Windows).\n\n"
+        f"Candidate repo: {candidate['full_name']} (⭐{candidate['stars']})\n"
+        f"Description: {candidate.get('description', '')}\n"
+        f"Already-installed skill repos: {installed}\n\n"
+        "Give a concrete reason (1-2 short sentences) why this repo's skills would "
+        "benefit the bot, or — if they're not a good fit — say so in one sentence. "
+        "Be specific about which kind of skills it adds and when they'd be used."
+    )
+    raw = _ollama_chat(
+        "You are Alfred the butler, deciding whether a skill repo is worth adopting.",
+        prompt,
+    )
+    return raw.strip()[:300]

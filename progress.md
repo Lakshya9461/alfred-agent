@@ -301,7 +301,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `SELF_IMPROVE_MAX_PER_DAY` | — | `3` | Hard cap on autonomous code applies per day (safety valve) |
 | `SELF_IMPROVE_MAX_FILES` | — | `2` | Max files a single autonomous apply may touch |
 | `CRITIC_MODEL` | — | `` | Second Ollama model for research second opinions (empty = reuse `SELF_IMPROVE_MODEL`) |
-| `SELF_IMPROVE_MODEL` | — | `qwen3.8:latest` | Model used by the self-improvement loop (research/critic/propose/apply) |
+| `SELF_IMPROVE_MODEL` | — | `qwen3.5:9b` | Model used by the self-improvement loop (research/critic/propose/apply) |
 | `PROGRESS_AGENT_FILE` | — | `progress_agent.md` | Self-improvement journal path (committed to git) |
 | `BROWSER_USE_ENABLED` | — | `true` | Use browser-use/Playwright for `browse_web`/`consult_chatgpt`; falls back to httpx fetch if unavailable |
 | `BROWSER_HEADLESS` | — | `true` | Headless Chromium mode |

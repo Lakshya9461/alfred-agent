@@ -94,7 +94,7 @@ SELF_IMPROVE_MAX_PER_DAY = int(os.getenv("SELF_IMPROVE_MAX_PER_DAY", "3"))
 CRITIC_MODEL = os.getenv("CRITIC_MODEL", "")
 # Model used by the self-improvement loop (research, critic, propose, apply).
 # Empty = reuse the active conversation model.
-SELF_IMPROVE_MODEL = os.getenv("SELF_IMPROVE_MODEL", "qwen3.8:latest")
+SELF_IMPROVE_MODEL = os.getenv("SELF_IMPROVE_MODEL", "qwen3.5:9b")
 # Max files a single autonomous apply may touch (keep patches tiny).
 SELF_IMPROVE_MAX_FILES = int(os.getenv("SELF_IMPROVE_MAX_FILES", "2"))
 # The self-improvement journal (committed to git).
