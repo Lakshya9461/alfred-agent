@@ -21,7 +21,7 @@ TELEGRAM_ALLOWED_USER_IDS = set(
 
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
-MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "10"))
+MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "30"))
 SELF_REVIEW_EVERY_N_TURNS = int(os.getenv("SELF_REVIEW_EVERY_N_TURNS", "5"))
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")

@@ -164,7 +164,7 @@ Push-update script: `python deploy.py <target> [--dry-run] [--no-elevate]`. Targ
 - `fire_due_jobs()` — thread-safe; returns jobs whose cron matches the current minute, stamps `last_fired` (fires at most once/minute), and deactivates one-shot jobs (`repeat=False`) after firing. Missed slots while the bot was down are simply skipped (cron semantics).
 - Matcher supports `*`, `*/n`, `a-b`, `a,b`; validated against bounds (59/23/31/12/7).
 - Exposed to the model as tools `schedule_reminder`, `list_reminders`, `remove_reminder`, and `schedule_batch_reminders`. User can also manage via `/cron` and `/cron cancel <id>`.
-- `add_batch(entries, lead_minutes=15)` — one-call bulk scheduler for timetables. Each entry: `{day: 0-6 (0=Sunday), time: 'HH:MM', course, room}`. Creates weekly-recurring jobs firing `lead_minutes` before each class with the course + room in the message. Exists because the model's `MAX_TOOL_ITERATIONS=10` cap would break a 25-class timetable done via individual `schedule_reminder` calls.
+- `add_batch(entries, lead_minutes=15)` — one-call bulk scheduler for timetables. Each entry: `{day: 0-6 (0=Sunday), time: 'HH:MM', course, room}`. Creates weekly-recurring jobs firing `lead_minutes` before each class with the course + room in the message. Exists because the model's `MAX_TOOL_ITERATIONS` cap would break a 25-class timetable done via individual `schedule_reminder` calls.
 
 ### `tools/__init__.py`
 - `TOOL_REGISTRY` dict: maps tool name → `{schema, func}`.
@@ -257,6 +257,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 21 | `pythonservice.exe -debug` prints "PythonService was unable to locate the service manager"; Application log (Event ID 14, "Python Service") shows `ModuleNotFoundError: No module named 'servicemanager'` | **Python 3.13** path resolver: an interpreter exe at the venv *root* is treated as a `Scripts\python.exe` layout, so it assumes the venv root is the exe's *parent*, never adds `venv\Lib\site-packages` to `sys.path`, and `servicemanager.pyd` can't be imported (dev's 3.14 computes the prefix correctly, hiding the bug locally). Fix: run the host from `venv\Scripts\` (next to `python.exe`). `service.py` now copies `pythonservice.exe` + DLLs into `Scripts` on install/update and registers that ImagePath via `_exe_name_`; `deploy.py` copies host deps into both venv root and `Scripts` (belt-and-braces across 3.13/3.14) |
 | 22 | Prod service (LocalSystem) `check_for_updates` logs `fatal: detected dubious ownership in repository at 'C:/1/alfred-agent'` — SYSTEM doesn't own the repo, so git refuses fetch/pull | Pass `-c safe.directory=<repo>` (forward-slashed) on every `monitor._git()` invocation; trusts the path for that process only, no global/system config needed, works on every deploy host |
 | 23 | Service set to **delayed** auto-start; on the slow boot of the headless prod box the delayed-start batch fired only minutes later (looked like "service starts only after SSH login"). Also the failure-action reset period was 0, so a past crash storm could permanently suppress auto-start on later boots | Use plain `--startup auto` (boot burst, no delayed-batch timing), and set the SCM failure-action reset period to 1 day (86400s) so old failures don't suppress future starts. Ollama on prod runs as a LocalSystem NSSM `AUTO_START` service (WinGet install), so it's up at boot independently of any login |
+| 24 | User wanted **no limits on models**: the `MAX_TOOL_ITERATIONS=10` cap stopped the agent mid-task on long jobs, and `OLLAMA_CONTEXT_LENGTH` in prod `.env` capped every model's context window (e.g. 32768) even when a model supports 262144 | Raised the `MAX_TOOL_ITERATIONS` default to `30` (still overridable per-machine via `.env`). Context window already defaults to `0` = auto-detect (no cap) in code — the fix is removing/zeroing `OLLAMA_CONTEXT_LENGTH` in `.env`. Confirmed `/model` has **no allowlist**: it lists every model from `/api/tags` and switches to any of them |
 
 ---
 
@@ -268,7 +269,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | — | Comma-separated user IDs |
 | `OLLAMA_API_URL` | — | `http://localhost:11434` | Ollama host (no trailing slash needed) |
 | `OLLAMA_MODEL` | — | `llama3` | Default startup model |
-| `MAX_TOOL_ITERATIONS` | — | `10` | Max tool calls per agent turn |
+| `MAX_TOOL_ITERATIONS` | — | `30` | Max tool calls per agent turn |
 | `SELF_REVIEW_EVERY_N_TURNS` | — | `5` | Turns between self-review passes |
 | `TAVILY_API_KEY` | — | `` | Optional; falls back to DDGS |
 | `SHELL_WORKING_DIR` | — | project root | CWD for shell commands |
