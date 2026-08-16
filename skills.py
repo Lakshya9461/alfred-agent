@@ -167,7 +167,11 @@ def _parse_frontmatter(content: str) -> dict:
 
 
 def _scan() -> list:
-    """Scan cloned repos for SKILL.md files and index name/description."""
+    """Scan cloned repos for SKILL.md files and index name/description.
+
+    Some repos ship the same skill multiple times (one SKILL.md per language,
+    e.g. ECC's en/ja/zh). Dedupe by (repo, name), keeping the description with
+    the highest ASCII-letter ratio (usually the English copy)."""
     skills = []
     if not os.path.isdir(SKILLS_DIR):
         return skills
@@ -200,7 +204,22 @@ def _scan() -> list:
                     "content": content,
                 }
             )
-    return skills
+
+    def _ascii_ratio(s: str) -> float:
+        letters = [c for c in s if c.isalpha()]
+        if not letters:
+            return 0.0
+        return sum(1 for c in letters if ord(c) < 128) / len(letters)
+
+    by_key = {}
+    for s in skills:
+        key = (s["repo"], s["name"])
+        prev = by_key.get(key)
+        if prev is None or _ascii_ratio(s["description"]) > _ascii_ratio(
+            prev["description"]
+        ):
+            by_key[key] = s
+    return list(by_key.values())
 
 
 def load_skills(force: bool = False) -> list:
