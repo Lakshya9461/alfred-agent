@@ -68,6 +68,22 @@ Administrator shell.
 >   icacls "C:\Program Files\WindowsApps\<store python package>" /grant Administrators:F /T
 >   ```
 >   (may be reset by Store updates; prefer the python.org install)
+>
+> **Service starts then dies instantly** — `service.py start` reports "did not
+> respond in a timely fashion" and running `pythonservice.exe -debug alfred-agent`
+> exits with `-1073741515` (0xC0000135, `STATUS_DLL_NOT_FOUND`). That means the
+> service host can't load the base interpreter DLL: `pythonservice.exe` needs
+> `python*.dll` (+ `vcruntime140*.dll`) next to it, but the Python install dir
+> isn't on its DLL search path. `deploy.py` copies them into the venv root
+> automatically; manually:
+> ```powershell
+> Copy-Item "C:\Program Files\Python313\python313.dll" ".\venv\"
+> Copy-Item "C:\Program Files\Python313\vcruntime140.dll" ".\venv\"
+> Copy-Item "C:\Program Files\Python313\vcruntime140_1.dll" ".\venv\"
+> ```
+> Also prefer a python.org install **for all users** — a per-user install
+> registers the interpreter only under your account's hive, which the
+> LocalSystem service can't read.
 
 Logs: the bot's normal logs stay in `data/` (`conversations.jsonl`,
 `audit_log.jsonl`); service-level Python logging goes to

@@ -19,7 +19,9 @@ UAC when required (pass --no-elevate to forbid that).
 """
 import os
 import sys
+import glob
 import json
+import shutil
 import argparse
 import subprocess
 import ctypes
@@ -43,6 +45,28 @@ if (-not (Test-Path "$Dest\venv\Scripts\python.exe")) {
     python -m venv "$Dest\venv"
 }
 & "$Dest\venv\Scripts\python.exe" -m pip install -q -r "$Dest\requirements.txt"
+# pythonservice.exe needs the base interpreter DLLs adjacent to it, else the
+# service dies instantly (STATUS_DLL_NOT_FOUND 0xC0000135).
+$cfg = "$Dest\venv\pyvenv.cfg"
+if (Test-Path $cfg) {
+    $home = (Get-Content $cfg | Where-Object { $_ -match '^home' }) -split '=', 2 | Select-Object -Last 1
+    $home = $home.Trim()
+    if ($home -and (Test-Path $home)) {
+        Get-ChildItem -Path $home -Filter 'python*.dll' -File | ForEach-Object {
+            if (-not (Test-Path "$Dest\venv\$($_.Name)")) {
+                Write-Host "[venv] copying $($_.Name) (service host dependency)"
+                Copy-Item $_.FullName "$Dest\venv\"
+            }
+        }
+        foreach ($v in @('vcruntime140.dll', 'vcruntime140_1.dll')) {
+            $srcV = Join-Path $home $v
+            if ((Test-Path $srcV) -and (-not (Test-Path "$Dest\venv\$v"))) {
+                Write-Host "[venv] copying $v (service host dependency)"
+                Copy-Item $srcV "$Dest\venv\"
+            }
+        }
+    }
+}
 Write-Host "[service] stopping (ignored if absent) ..."
 & "$Dest\venv\Scripts\python.exe" "$Dest\service.py" stop 2>$null
 Write-Host "[service] removing (ignored if absent) ..."
@@ -114,6 +138,30 @@ def unc_path(target: dict) -> str:
     return f"\\\\{target['host']}\\{drive}${rest}"
 
 
+def ensure_service_host_dlls(dest: str) -> None:
+    """pythonservice.exe needs the base interpreter DLLs adjacent to it, or the
+    service dies instantly with STATUS_DLL_NOT_FOUND (0xC0000135). The Python
+    home isn't on the service's DLL search path. Copy python*.dll + vcruntime
+    from the venv's base install into the venv root if missing."""
+    venv = os.path.join(dest, "venv")
+    cfg = os.path.join(venv, "pyvenv.cfg")
+    if not os.path.exists(cfg):
+        return
+    home = None
+    for line in open(cfg, encoding="utf-8"):
+        if line.strip().startswith("home"):
+            home = line.split("=", 1)[1].strip()
+            break
+    if not home or not os.path.isdir(home):
+        return
+    for pattern in ("python*.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+        for src in glob.glob(os.path.join(home, pattern)):
+            dst = os.path.join(venv, os.path.basename(src))
+            if not os.path.exists(dst):
+                print(f"[venv] copying {os.path.basename(src)} (service host dependency)")
+                shutil.copy2(src, dst)
+
+
 def deploy_local(target: dict, dry_run: bool) -> int:
     dst = target["path"]
     code = run(robocopy(BASE_DIR, dst), dry_run)
@@ -125,6 +173,8 @@ def deploy_local(target: dict, dry_run: bool) -> int:
     if not os.path.exists(venv_py):
         print(f"[venv] creating {dst}\\venv ...")
         run(["python", "-m", "venv", os.path.join(dst, "venv")], dry_run)
+    if not dry_run:
+        ensure_service_host_dlls(dst)
 
     print("[venv] pip install -r requirements.txt ...")
     run([venv_py, "-m", "pip", "install", "-q", "-r", os.path.join(dst, "requirements.txt")], dry_run)
