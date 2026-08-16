@@ -203,10 +203,12 @@ def _scan() -> list:
     return skills
 
 
-def load_skills() -> list:
-    """Return the skill index (cached until a repo refresh invalidates it)."""
+def load_skills(force: bool = False) -> list:
+    """Return the skill index (cached until a repo refresh invalidates it).
+    Pass force=True to rescan from disk — use in interactive commands so a
+    stale empty cache from before the repos were cloned is never shown."""
     global _skill_cache
-    if _skill_cache is None:
+    if _skill_cache is None or force:
         _skill_cache = _scan()
     return _skill_cache
 

@@ -373,7 +373,7 @@ async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"/skills: could not schedule background refresh: {e}")
 
-    index = skills.format_skill_index(skills.load_skills())
+    index = skills.format_skill_index(skills.load_skills(force=True))
     await update.message.reply_text(
         f"📘 Installed skills:\n\n{index}\n\n"
         "Ask me to use a skill and I'll load its instructions automatically. "
