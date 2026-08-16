@@ -246,6 +246,12 @@ async def research(bot, candidate: dict) -> dict | None:
     topic = candidate.get("topic", "improve the bot")
     summary = await asyncio.to_thread(_research_sync, candidate)
     _append_journal("RESEARCH", topic, summary)
+    await _notify(
+        bot,
+        f"🧠 *Research pass* — *{topic}*\n\n"
+        f"Search + critic done, deciding whether to apply an upgrade.\n"
+        f"Full findings: `progress_agent.md`",
+    )
 
     # Ask the main model to turn findings into a concrete proposal.
     repo_overview = _repo_overview()
@@ -272,15 +278,32 @@ async def research(bot, candidate: dict) -> dict | None:
         decision = {}
 
     if decision.get("decision") != "apply" or not decision.get("files"):
-        _append_journal("SKIP", topic, decision.get("change_summary", "no concrete finding"))
+        reason = decision.get("change_summary", "no concrete finding")
+        _append_journal("SKIP", topic, reason)
+        await _notify(bot, f"🧠 *Research pass* — *{topic}*\n\nSkipped: {reason}")
         return None
 
+    await _notify(
+        bot,
+        f"🧠 *Research pass* — *{topic}*\n\n"
+        f"Applying: {decision.get('change_summary', '')}\n"
+        f"Files: `{', '.join(decision['files'])}`",
+    )
     return {
         "topic": topic,
         "files": [f.replace("\\", "/") for f in decision["files"]],
         "change_summary": decision.get("change_summary", ""),
         "research": summary,
     }
+
+
+async def _notify(bot, text: str) -> None:
+    """Send a self-improve status message to all allowed users."""
+    for user_id in TELEGRAM_ALLOWED_USER_IDS:
+        try:
+            await bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"self_improve: notify failed: {e}")
 
 
 def _repo_overview() -> str:
@@ -428,20 +451,13 @@ async def apply(bot, proposal: dict) -> None:
         f"Files changed: {', '.join(changed)}\n{outcome['summary']}\n\n{status}",
     )
 
-    for user_id in TELEGRAM_ALLOWED_USER_IDS:
-        try:
-            await bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"🧠 *Self-improvement applied*\n\n"
-                    f"`{outcome['summary']}`\n\n"
-                    f"Files: `{', '.join(changed)}`\n{status}\n"
-                    f"See `progress_agent.md` for research details."
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"self_improve: notify failed: {e}")
+    await _notify(
+        bot,
+        f"🧠 *Self-improvement applied*\n\n"
+        f"`{outcome['summary']}`\n\n"
+        f"Files: `{', '.join(changed)}`\n{status}\n"
+        f"Research details: `progress_agent.md`",
+    )
 
     if any(c.endswith(".py") for c in changed):
         logger.info(f"self_improve: code changed, restarting ({changed})")
