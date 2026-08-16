@@ -16,9 +16,11 @@ from config import (
     GIT_UPDATE_CHECK_INTERVAL,
     AUTO_PULL,
     CRON_CHECK_INTERVAL,
+    SKILL_UPDATE_INTERVAL,
 )
 import ollama_utils
 from tools import cron as cron_tools
+import skills
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,52 @@ async def run_cron_scheduler(bot):
         except Exception as e:
             logger.error(f"run_cron_scheduler: {e}")
         await asyncio.sleep(CRON_CHECK_INTERVAL)
+
+
+async def update_skills(bot):
+    """
+    Background task: keep installed skill repos up to date and periodically
+    search GitHub for new agent-skill repositories, notifying the user with
+    Install / Dismiss buttons for each new candidate.
+    """
+    await asyncio.sleep(25)
+    while True:
+        try:
+            await asyncio.to_thread(skills.ensure_repos)
+        except Exception as e:
+            logger.error(f"update_skills: refresh failed: {e}")
+
+        try:
+            candidates = await asyncio.to_thread(skills.new_candidates)
+        except Exception as e:
+            logger.error(f"update_skills: discovery failed: {e}")
+            candidates = []
+
+        for cand in candidates[:2]:
+            msg = (
+                f"🧠 *New skill repo candidate:*\n\n"
+                f"**{cand['full_name']}** ⭐{cand['stars']}\n"
+                f"{cand['description']}\n\n"
+                f"[Repo]({cand['html_url']})"
+            )
+            reply = {
+                "inline_keyboard": [
+                    [
+                        {"text": "Install", "callback_data": f"skill|yes|{cand['clone_url']}"},
+                        {"text": "Dismiss", "callback_data": f"skill|no|{cand['full_name']}"},
+                    ]
+                ]
+            }
+            for user_id in TELEGRAM_ALLOWED_USER_IDS:
+                try:
+                    await bot.send_message(
+                        chat_id=user_id, text=msg, parse_mode="Markdown",
+                        reply_markup=reply,
+                    )
+                except Exception as e:
+                    logger.error(f"update_skills: failed to notify {user_id}: {e}")
+
+        await asyncio.sleep(SKILL_UPDATE_INTERVAL)
 
 
 async def check_for_updates(bot):

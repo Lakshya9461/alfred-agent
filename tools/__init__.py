@@ -10,6 +10,8 @@ from .web_search import search
 from .shell_exec import run_shell, ConfirmationRequired
 from .memory import add_lesson
 from .cron import add_job, add_batch, list_jobs, remove_job
+from .browser import browse_web, consult_chatgpt
+from skills import read_skill
 
 TOOL_REGISTRY = {
     "web_search": {
@@ -208,6 +210,85 @@ TOOL_REGISTRY = {
             }
         },
         "func": add_batch
+    },
+    "read_skill": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "read_skill",
+                "description": (
+                    "Loads the full instructions for an installed skill (SKILL.md). "
+                    "Call this BEFORE attempting any task that matches one of the "
+                    "skills listed in the system prompt. Use the exact skill name."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "The skill name to load."
+                        }
+                    },
+                    "required": ["name"]
+                }
+            }
+        },
+        "func": read_skill
+    },
+    "browse_web": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "browse_web",
+                "description": (
+                    "Drives a real web browser (browser-use) to open a URL and/or "
+                    "perform a task described in plain language, e.g. 'go to X and "
+                    "extract the version number'. Use when web_search isn't enough "
+                    "or you need dynamic/JS-rendered page content. Falls back to a "
+                    "plain HTTP fetch if browser-use is unavailable."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The URL to open (optional)."
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Natural-language instruction of what to do/read on the page (optional)."
+                        }
+                    },
+                    "required": []
+                }
+            }
+        },
+        "func": browse_web
+    },
+    "consult_chatgpt": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "consult_chatgpt",
+                "description": (
+                    "Asks ChatGPT (chat.openai.com) a question via a real browser and "
+                    "returns ChatGPT's answer. Use this for a second opinion on hard "
+                    "problems. Requires the user's logged-in ChatGPT session; if login "
+                    "is required it reports that instead."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question to ask ChatGPT."
+                        }
+                    },
+                    "required": ["question"]
+                }
+            }
+        },
+        "func": consult_chatgpt
     }
 }
 

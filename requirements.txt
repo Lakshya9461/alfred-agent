@@ -3,3 +3,7 @@ httpx
 python-dotenv
 duckduckgo-search
 pywin32>=306
+# Browser automation (browse_web / consult_chatgpt). After installing run:
+#   python -m playwright install chromium
+browser-use
+playwright

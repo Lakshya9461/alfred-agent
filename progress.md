@@ -29,16 +29,20 @@ alfred-agent/
 ├── agent_loop.py            # Core Ollama tool-calling async generator loop
 ├── telegram_bot.py          # All Telegram handlers, commands, callbacks, wiring
 ├── self_review.py           # Background asyncio task: periodic conversation self-review
-├── monitor.py               # Background tasks: new-model watcher, auto git update check/pull, cron reminder scheduler
+├── self_improve.py          # Always-on self-improvement: research → autonomous apply → commit/push → restart
+├── skills.py                # Skill packs (SKILL.md repos) loader/index/install + GitHub discovery
+├── monitor.py               # Background tasks: new-model watcher, auto git update check/pull, cron reminder scheduler, skill updater
 ├── ollama_utils.py          # Async helpers: list models, detect context window
 ├── service.py               # pywin32 Windows service wrapper (runs as LocalSystem)
 ├── deploy.py                # Push updates to other devices (robocopy + WinRM service reinstall)
+├── progress_agent.md        # Alfred's auto-maintained self-improvement journal (committed)
 ├── tools/
 │   ├── __init__.py          # Tool registry + execute_tool dispatcher
 │   ├── web_search.py        # Tavily (if key) or DuckDuckGo search
 │   ├── shell_exec.py        # PowerShell/WSL execution, dangerous pattern detection
 │   ├── memory.py            # Lesson persistence, conversation logging
-│   └── cron.py              # Cron-style reminders (persisted, fired by scheduler)
+│   ├── cron.py              # Cron-style reminders (persisted, fired by scheduler)
+│   └── browser.py           # browse_web / consult_chatgpt via browser-use (Playwright), httpx fallback
 ├── data/
 │   ├── lessons.json         # Persisted lessons (max MAX_LESSONS entries)
 │   ├── conversations.jsonl  # Append-only full conversation log (rotated via LOG_MAX_BYTES)
@@ -46,7 +50,11 @@ alfred-agent/
 │   ├── self_review_state.json  # Tracks last reviewed line pointer for self-review
 │   ├── chat_histories.json  # Persisted per-chat histories (survive restarts)
 │   ├── shell_lock.json      # Kill-switch state for /lockdown (survives restarts)
-│   └── cron_jobs.json       # Scheduled reminders (survive restarts)
+│   ├── cron_jobs.json       # Scheduled reminders (survive restarts)
+│   ├── self_improve.json    # Self-improve state: open candidates + daily apply counter
+│   ├── skills_config.json   # Skills state: enabled/ignored/seen repos
+│   ├── skills/              # Cloned skill repos (gitignored)
+│   └── browser_profile/     # Playwright persistent profile (ChatGPT login session)
 ├── logs/                    # Service-level Python logs (alfred-service.log, rotating)
 ├── deploy_config.json       # Deploy targets — NOT in git
 ├── .env                     # Secrets — NOT in git
@@ -258,6 +266,7 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | 22 | Prod service (LocalSystem) `check_for_updates` logs `fatal: detected dubious ownership in repository at 'C:/1/alfred-agent'` — SYSTEM doesn't own the repo, so git refuses fetch/pull | Pass `-c safe.directory=<repo>` (forward-slashed) on every `monitor._git()` invocation; trusts the path for that process only, no global/system config needed, works on every deploy host |
 | 23 | Service set to **delayed** auto-start; on the slow boot of the headless prod box the delayed-start batch fired only minutes later (looked like "service starts only after SSH login"). Also the failure-action reset period was 0, so a past crash storm could permanently suppress auto-start on later boots | Use plain `--startup auto` (boot burst, no delayed-batch timing), and set the SCM failure-action reset period to 1 day (86400s) so old failures don't suppress future starts. Ollama on prod runs as a LocalSystem NSSM `AUTO_START` service (WinGet install), so it's up at boot independently of any login |
 | 24 | User wanted **no limits on models**: the `MAX_TOOL_ITERATIONS=10` cap stopped the agent mid-task on long jobs, and `OLLAMA_CONTEXT_LENGTH` in prod `.env` capped every model's context window (e.g. 32768) even when a model supports 262144 | Raised the `MAX_TOOL_ITERATIONS` default to `30` (still overridable per-machine via `.env`). Context window already defaults to `0` = auto-detect (no cap) in code — the fix is removing/zeroing `OLLAMA_CONTEXT_LENGTH` in `.env`. Confirmed `/model` has **no allowlist**: it lists every model from `/api/tags` and switches to any of them |
+| 25 | User wanted a self-upgrading agent: an **Alfred butler persona**, **skills** loaded from external SKILL.md repos, **browser-use** for real-browser research (incl. consulting ChatGPT), and an **always-on background loop** that researches on its own and on every task, applies upgrades to its own code, and **notes everything in `progress_agent.md`** | **Persona**: butler tone + initiative baked into the `agent_loop.py` system prompt. **Skills**: `skills.py` clones/updates SKILL.md repos (default addyosmani + mattpocock), builds a compact prompt index, exposes the `read_skill(name)` tool for progressive disclosure, and discovers new repos via GitHub search (`monitor.update_skills` notifies with Install/Dismiss buttons; `/skills` lists them). **Browser**: `tools/browser.py` — `browse_web`/`consult_chatgpt` driven by browser-use (Ollama as the LLM via its OpenAI-compatible `/v1` endpoint), httpx fallback, persistent Playwright profile under `data/browser_profile` for the ChatGPT login. **Self-improve**: `self_improve.py` loop researches (web_search + critic Ollama model + optionally ChatGPT), writes dated `[RESEARCH]/[SKIP]/[APPLIED]/[FAILED]` entries to `progress_agent.md`, and autonomously applies patches to its own code with safety nets: `SELF_IMPROVE_MAX_PER_DAY` cap, a path blocklist (`.env`/`data/`/`venv`/`logs`/`service.py`/`deploy.py`/`self_improve.py`/`runtime_config.py`/`progress.md`), `py_compile`-gate with `git checkout` revert on failure, then commit + push (best-effort) + restart. Post-turn hook (`self_improve.note_turn`) journals every task and queues research on failed turns |
 
 ---
 
@@ -286,6 +295,17 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 | `CONFIRM_ALL_COMMANDS` | — | `false` | Trial mode: require confirmation for EVERY shell command |
 | `OLLAMA_REQUEST_TIMEOUT` | — | `300` | Per-request timeout (s) for Ollama API calls; generous so cold model loads don't fail |
 | `OLLAMA_CONTEXT_LENGTH` | — | `0` | Hard cap on `num_ctx` sent to Ollama. `0` = auto-detect. Set on machines that can't handle a huge-context model (e.g. `32768` for ornith:9b's 262144) — without a cap, `/api/chat` hangs as Ollama tries to allocate the full KV cache |
+| `SKILL_REPOS` | — | addyosmani/agent-skills + mattpocock/skills | Comma-separated git URLs of skill repos to clone into `data/skills/` and keep updated |
+| `SKILL_UPDATE_INTERVAL` | — | `21600` | Seconds between skill-repo refresh + GitHub discovery (6h) |
+| `SELF_IMPROVE_INTERVAL` | — | `1800` | Seconds between autonomous research passes (`0` disables the loop) |
+| `SELF_IMPROVE_MAX_PER_DAY` | — | `3` | Hard cap on autonomous code applies per day (safety valve) |
+| `SELF_IMPROVE_MAX_FILES` | — | `2` | Max files a single autonomous apply may touch |
+| `CRITIC_MODEL` | — | `` | Second Ollama model for research second opinions (empty = reuse active model) |
+| `PROGRESS_AGENT_FILE` | — | `progress_agent.md` | Self-improvement journal path (committed to git) |
+| `BROWSER_USE_ENABLED` | — | `true` | Use browser-use/Playwright for `browse_web`/`consult_chatgpt`; falls back to httpx fetch if unavailable |
+| `BROWSER_HEADLESS` | — | `true` | Headless Chromium mode |
+| `BROWSER_USE_TIMEOUT` | — | `180` | Per-browse task timeout (s) |
+| `EXTERNAL_LLM_BASE_URL` / `EXTERNAL_LLM_API_KEY` / `EXTERNAL_LLM_MODEL` | — | empty | Future OpenAI-compatible external LLM for the research loop (empty = local Ollama only) |
 
 ---
 
@@ -301,6 +321,10 @@ agent_loop.run_agent_turn()  ←─── yields AgentEvent objects
 - **Kill switch is Telegram-only** — `/lockdown` persists to disk but still requires the bot to be reachable to take effect.
 - **Reminders only fire while the bot is running** — `run_cron_scheduler` lives in-process, so a reminder missed while the bot is down is skipped (not back-filled). True always-on cron (Windows Task Scheduler / `schtasks`) would be a future enhancement.
 - **DOW `7` not supported** — cron matcher normalizes Sunday to `0`; `7` in the day-of-week field validates but never matches (use `0`).
+- **Autonomous self-upgrades are inherently risky** — the `self_improve` loop edits the running bot's own code. Safety nets exist (daily cap, blocklist, `py_compile` gate + git revert, everything committed) but the applied patch quality depends on the active Ollama model. Review `progress_agent.md` and `git log` after each `[APPLIED]` entry.
+- **Push from prod may fail** — the service runs as LocalSystem with no git credentials; `self_improve._commit_and_push` commits locally and reports a failed push, so prod-only hosts self-commit but don't publish. Apply/push normally happens on dev.
+- **browser-use needs a one-time Chromium install + ChatGPT login** — `python -m playwright install chromium` must be run once per host, and `consult_chatgpt` requires a logged-in ChatGPT session in the persistent Playwright profile (`data/browser_profile`). Until then `browse_web` degrades to `fetch_url`.
+- **GitHub search rate limits** — `skills.search_candidates` hits the unauthenticated `/search/repositories` API (60 req/h); keep `SKILL_UPDATE_INTERVAL` generous.
 
 ---
 

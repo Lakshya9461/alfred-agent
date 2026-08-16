@@ -24,6 +24,8 @@ import self_review
 import monitor
 import runtime_config
 import ollama_utils
+import skills
+import self_improve
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -356,6 +358,19 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(res)
 
 @whitelist_only
+async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Refresh skill repos and list installed skills."""
+    status_msg = await update.message.reply_text("🧠 Refreshing skill repos...")
+    await asyncio.to_thread(skills.ensure_repos)
+    index = skills.format_skill_index(skills.load_skills())
+    reply = (
+        f"📘 *Installed skills:*\n\n{index}\n\n"
+        "Ask me to use a skill and I'll load its instructions automatically. "
+        "New skill-repo candidates are offered via Install/Dismiss buttons as they're found."
+    )
+    await status_msg.edit_text(reply, parse_mode="Markdown")
+
+@whitelist_only
 async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List scheduled reminders, or cancel one with `/cron cancel <id>`."""
     from tools.cron import list_jobs, remove_job
@@ -394,10 +409,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_msg = await update.message.reply_text("🤔 Thinking...")
     
+    turn_failed = False
+    tool_names = []
+    last_outcome = ""
+    
     try:
         async for event in run_agent_turn(user_msg, history, lessons):
             if event.type == "tool_call_requested":
                 func_name = event.data["name"]
+                tool_names.append(func_name)
                 args = event.data["arguments"]
                 if func_name == "web_search":
                     query = args.get("query", "")
@@ -405,6 +425,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif func_name == "run_shell":
                     cmd = args.get("command", "")
                     await status_msg.edit_text(f"💻 running: {cmd[:100]}")
+                elif func_name == "browse_web":
+                    await status_msg.edit_text("🌐 browsing the web...")
+                elif func_name == "consult_chatgpt":
+                    await status_msg.edit_text("🗣️ consulting ChatGPT...")
+                elif func_name == "read_skill":
+                    await status_msg.edit_text(f"📘 loading skill: {args.get('name', '')}")
                     
             elif event.type == "confirmation_required":
                 func_name = event.data["name"]
@@ -459,10 +485,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(ans)
                     
             elif event.type == "error":
+                turn_failed = True
+                last_outcome = str(event.data)
                 await status_msg.edit_text(f"❌ Error: {event.data}")
                 
     except Exception as e:
         logger.exception("Error during agent turn")
+        turn_failed = True
+        last_outcome = str(e)
         try:
             await status_msg.edit_text(f"❌ Internal error: {e}")
         except Exception:
@@ -471,6 +501,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     self_review.TURN_COUNTER += 1
     prune_history(history)
     save_histories()
+
+    summary = f"Tools used: {', '.join(dict.fromkeys(tool_names)) or 'none'}.\nOutcome: {last_outcome or 'answered'}"
+    asyncio.create_task(
+        asyncio.to_thread(self_improve.note_turn, user_msg, summary, turn_failed)
+    )
 
 @whitelist_only
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -565,6 +600,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(reply, parse_mode="Markdown")
         return
 
+    # ── Skill repo Install/Dismiss ─────────────────────────────────────────────
+    if data.startswith("skill|"):
+        parts = data.split("|", 2)
+        action = parts[1] if len(parts) > 1 else "no"
+        value = parts[2] if len(parts) > 2 else ""
+        if action == "yes":
+            await query.edit_message_text(f"🧠 Installing skill repo `{skills.repo_name(value)}`...", parse_mode="Markdown")
+            await asyncio.to_thread(skills.enable_repo, value)
+            await query.edit_message_text(
+                f"✅ Skill repo installed and will stay updated in the background.\n"
+                f"Run /skills to see the skill index.",
+                parse_mode="Markdown"
+            )
+        else:
+            await asyncio.to_thread(skills.ignore_repo, value)
+            await query.edit_message_text("Dismissed — I won't suggest this repo again.")
+        return
+
     # ── Agent shell confirmation ───────────────────────────────────────────────
     cb_id, action = data.split("|", 1)
     
@@ -598,6 +651,12 @@ async def post_init(app: Application):
 
     cron_task = asyncio.create_task(monitor.run_cron_scheduler(app.bot))
     app.bot_data["cron_task"] = cron_task
+
+    skills_task = asyncio.create_task(monitor.update_skills(app.bot))
+    app.bot_data["skills_task"] = skills_task
+
+    improve_task = asyncio.create_task(self_improve.run_self_improve(app.bot))
+    app.bot_data["improve_task"] = improve_task
     
     # Register the command menu so it appears in the Telegram UI
     await app.bot.set_my_commands([
@@ -612,6 +671,7 @@ async def post_init(app: Application):
         BotCommand("correct", "Teach Alfred a new lesson"),
         BotCommand("forget",  "Delete a lesson by index"),
         BotCommand("cron",    "List scheduled reminders"),
+        BotCommand("skills",  "List installed skills"),
         BotCommand("update",  "Pull the latest code and restart the bot"),
         BotCommand("lockdown", "Disable all shell execution (kill switch)"),
         BotCommand("unlock",  "Re-enable shell execution"),
@@ -626,7 +686,8 @@ async def post_init(app: Application):
 
 async def post_shutdown(app: Application):
     """Callback triggered during application shutdown."""
-    for key in ("self_review_task", "models_task", "update_task", "cron_task"):
+    for key in ("self_review_task", "models_task", "update_task", "cron_task",
+                "skills_task", "improve_task"):
         task = app.bot_data.get(key)
         if task:
             task.cancel()
@@ -664,6 +725,7 @@ def main():
     app.add_handler(CommandHandler("lessons", lessons_command))
     app.add_handler(CommandHandler("forget",  forget_command))
     app.add_handler(CommandHandler("cron",    cron_command))
+    app.add_handler(CommandHandler("skills",  skills_command))
     app.add_handler(CommandHandler("update",  update_command, block=False))
     app.add_handler(CommandHandler("lockdown", lockdown_command))
     app.add_handler(CommandHandler("unlock",   unlock_command))

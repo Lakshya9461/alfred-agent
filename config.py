@@ -67,3 +67,50 @@ def effective_context_length(detected: int) -> int:
     if OLLAMA_CONTEXT_LENGTH > 0:
         return OLLAMA_CONTEXT_LENGTH
     return detected
+
+
+# ── Skills (SKILL.md packs cloned into data/skills) ─────────────────────────
+# Comma-separated git URLs of skill repositories Alfred should install and keep
+# updated. Skills are plain Markdown; the model loads their full text on demand.
+SKILL_REPOS = [
+    u.strip()
+    for u in os.getenv(
+        "SKILL_REPOS",
+        "https://github.com/addyosmani/agent-skills.git,"
+        "https://github.com/mattpocock/skills.git",
+    ).split(",")
+    if u.strip()
+]
+# Seconds between background skill-repo refresh + GitHub discovery passes
+SKILL_UPDATE_INTERVAL = int(os.getenv("SKILL_UPDATE_INTERVAL", "21600"))
+
+# ── Self-improvement loop (self_improve.py) ─────────────────────────────────
+# Seconds between autonomous research passes. 0 = disabled.
+SELF_IMPROVE_INTERVAL = int(os.getenv("SELF_IMPROVE_INTERVAL", "1800"))
+# Hard cap on autonomous code applies per rolling day (safety valve).
+SELF_IMPROVE_MAX_PER_DAY = int(os.getenv("SELF_IMPROVE_MAX_PER_DAY", "3"))
+# Second Ollama model used as a "critic" for second opinions during research.
+# Empty = reuse the active model.
+CRITIC_MODEL = os.getenv("CRITIC_MODEL", "")
+# Max files a single autonomous apply may touch (keep patches tiny).
+SELF_IMPROVE_MAX_FILES = int(os.getenv("SELF_IMPROVE_MAX_FILES", "2"))
+# The self-improvement journal (committed to git).
+PROGRESS_AGENT_FILE = os.getenv("PROGRESS_AGENT_FILE", "progress_agent.md")
+
+# ── Browser automation (browser-use / Playwright) ───────────────────────────
+# Requires `pip install browser-use playwright` + `playwright install chromium`.
+# Falls back to plain HTTP fetch when unavailable.
+BROWSER_USE_ENABLED = os.getenv("BROWSER_USE_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on"
+)
+BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() in (
+    "1", "true", "yes", "on"
+)
+BROWSER_USE_TIMEOUT = int(os.getenv("BROWSER_USE_TIMEOUT", "180"))
+
+# ── External LLM (future OpenAI-compatible API for the research loop) ───────
+# Leave empty to use only local Ollama. When set, the research loop may use an
+# external OpenAI-compatible endpoint in addition to the local critic model.
+EXTERNAL_LLM_BASE_URL = os.getenv("EXTERNAL_LLM_BASE_URL", "")
+EXTERNAL_LLM_API_KEY = os.getenv("EXTERNAL_LLM_API_KEY", "")
+EXTERNAL_LLM_MODEL = os.getenv("EXTERNAL_LLM_MODEL", "")
